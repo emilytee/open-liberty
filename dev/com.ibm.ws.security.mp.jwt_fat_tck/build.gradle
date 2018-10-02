@@ -14,7 +14,7 @@ plugins {
 }
 
 audit {
-    failOnError = false
+    failOnError = true
 }
 
 // Define Group:ArtifactId:Version coordinates of each dependency
