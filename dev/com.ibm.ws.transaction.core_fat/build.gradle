@@ -9,6 +9,7 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 
+<<<<<<< HEAD
 plugins {
   id "net.ossindex.audit" version "0.3.8-beta"
 }
@@ -17,6 +18,8 @@ audit {
     failOnError = true
 }
 
+=======
+>>>>>>> be57155c198f1ab7eb06414104e3a6332a93a24c
 // Define G:A:V coordinates of each dependency
 dependencies {
   requiredLibs 'commons-logging:commons-logging:1.1.3'

@@ -1,10 +1,10 @@
-plugins {
-  id "net.ossindex.audit" version "0.3.8-beta"
-}
 
+<<<<<<< HEAD
 audit {
     failOnError = true
 }
+=======
+>>>>>>> be57155c198f1ab7eb06414104e3a6332a93a24c
 
 task addRequiredFiles(type: Copy) {
   dependsOn ':com.ibm.ws.kernel.feature:jar'

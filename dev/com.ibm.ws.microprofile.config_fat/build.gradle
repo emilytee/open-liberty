@@ -9,6 +9,7 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 
+<<<<<<< HEAD
 plugins {
   id "net.ossindex.audit" version "0.3.8-beta"
 }
@@ -16,6 +17,8 @@ plugins {
 audit {
     failOnError = true
 }
+=======
+>>>>>>> be57155c198f1ab7eb06414104e3a6332a93a24c
 
 dependencies {
   requiredLibs 'commons-logging:commons-logging:1.1.3', 'commons-codec:commons-codec:1.6', project(':com.ibm.websphere.org.eclipse.microprofile.config.1.1')
