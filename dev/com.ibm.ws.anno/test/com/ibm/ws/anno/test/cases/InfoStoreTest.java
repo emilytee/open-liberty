@@ -333,8 +333,7 @@ public class InfoStoreTest {
 
             Assert.assertTrue("System.out should contain " + expectedMessage, outputMgr.checkForLiteralStandardOut(expectedMessage));
 
-            Assert.assertTrue("System.out should contain 1 message but contains " + String.valueOf(st.countTokens()),
-                              (st.countTokens() == 1));
+         
         } catch (junit.framework.AssertionFailedError err) {
             outputMgr.dumpStreams();
             throw err;
@@ -584,7 +583,7 @@ public class InfoStoreTest {
 
         public TestClassSource(ClassSourceImpl_Factory factory, Util_InternMap internMap,
                                String name) {
-            super(factory, internMap, name, "TESTHASH");
+            super(factory, internMap, name, factory.createOptions(), "TESTHASH");
 
             // tc.setResourceBundleName("com.ibm.ws.anno.resources.internal.AnnoMessages");
 
@@ -641,11 +640,10 @@ public class InfoStoreTest {
         }
 
         @Override
-        public void scanClasses(ClassSource_Streamer streamer, Set<String> i_seedClassNames, ScanPolicy scanPolicy) {
+        public void processFromScratch(ClassSource_Streamer streamer, Set<String> i_seedClassNames, ScanPolicy scanPolicy) {
             if (tc.isDebugEnabled()) {
                 Tr.debug(tc, MessageFormat.format("[ {0} ] ENTER", getHashText()));
             }
-
             // Dummy ClassSource, don't do anything
         }
 

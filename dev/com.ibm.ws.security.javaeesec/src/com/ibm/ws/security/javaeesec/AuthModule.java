@@ -13,8 +13,6 @@ package com.ibm.ws.security.javaeesec;
 import java.util.HashMap;
 import java.util.Map;
 
-import javax.enterprise.inject.Instance;
-import javax.enterprise.inject.spi.CDI;
 import javax.security.auth.Subject;
 import javax.security.auth.callback.CallbackHandler;
 import javax.security.auth.message.AuthException;
@@ -35,6 +33,7 @@ import javax.servlet.http.HttpServletResponse;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Trivial;
+import com.ibm.ws.security.javaeesec.properties.ModulePropertiesUtils;
 
 /*
  * This JASPI authentication module is used as the bridge ServerAuthModule for JSR-375.
@@ -80,9 +79,8 @@ public class AuthModule implements ServerAuthModule {
     @Override
     public AuthStatus validateRequest(MessageInfo messageInfo, Subject clientSubject, Subject serviceSubject) throws AuthException {
         AuthStatus status = AuthStatus.SEND_FAILURE;
-
         try {
-            HttpAuthenticationMechanism authMech = getHttpAuthenticationMechanism();
+            HttpAuthenticationMechanism authMech = getModulePropertiesUtils().getHttpAuthenticationMechanism();
             HttpMessageContext httpMessageContext = createHttpMessageContext(messageInfo, clientSubject);
             AuthenticationStatus authenticationStatus = authMech.validateRequest((HttpServletRequest) messageInfo.getRequestMessage(),
                                                                                  (HttpServletResponse) messageInfo.getResponseMessage(),
@@ -92,10 +90,11 @@ public class AuthModule implements ServerAuthModule {
         } catch (Exception e) {
             // TODO: Issue serviceability message.
             e.printStackTrace();
-            AuthException authException = new AuthException();
+            AuthException authException = new AuthException(e.getMessage());
             authException.initCause(e);
             throw authException;
         }
+
         return status;
     }
 
@@ -104,7 +103,7 @@ public class AuthModule implements ServerAuthModule {
         AuthStatus status = AuthStatus.SEND_FAILURE;
         // TODO: Determine if HttpMessageContext and HttpAuthenticationMechanism must have been cached in the MessageInfo
         try {
-            HttpAuthenticationMechanism authMech = getHttpAuthenticationMechanism();
+            HttpAuthenticationMechanism authMech = getModulePropertiesUtils().getHttpAuthenticationMechanism();
             HttpMessageContext httpMessageContext = createHttpMessageContext(messageInfo, null);
             AuthenticationStatus authenticationStatus = authMech.secureResponse((HttpServletRequest) messageInfo.getRequestMessage(),
                                                                                 (HttpServletResponse) messageInfo.getResponseMessage(),
@@ -122,18 +121,9 @@ public class AuthModule implements ServerAuthModule {
 
     @Override
     public void cleanSubject(MessageInfo messageInfo, Subject subject) throws AuthException {
-        HttpAuthenticationMechanism authMech = getHttpAuthenticationMechanism();
+        HttpAuthenticationMechanism authMech = getModulePropertiesUtils().getHttpAuthenticationMechanism();
         HttpMessageContext httpMessageContext = createHttpMessageContext(messageInfo, null);
         authMech.cleanSubject((HttpServletRequest) messageInfo.getRequestMessage(), (HttpServletResponse) messageInfo.getResponseMessage(), httpMessageContext);
-    }
-
-    private HttpAuthenticationMechanism getHttpAuthenticationMechanism() {
-        Instance<HttpAuthenticationMechanism> beanInstance = getCDI().select(HttpAuthenticationMechanism.class);
-        return beanInstance.get();
-    }
-
-    protected CDI getCDI() {
-        return CDI.current();
     }
 
     protected HttpMessageContext createHttpMessageContext(MessageInfo messageInfo, Subject clientSubject) {
@@ -147,6 +137,10 @@ public class AuthModule implements ServerAuthModule {
             httpMessageContext = new HttpMessageContextImpl(messageInfo, clientSubject, handler);
         }
         return httpMessageContext;
+    }
+
+    protected ModulePropertiesUtils getModulePropertiesUtils() {
+        return ModulePropertiesUtils.getInstance();
     }
 
     private AuthStatus translateValidateRequestStatus(AuthenticationStatus authenticationStatus) {
@@ -184,9 +178,9 @@ public class AuthModule implements ServerAuthModule {
         } else if (AuthenticationStatus.SEND_CONTINUE.equals(authenticationStatus)) {
             status = AuthStatus.SEND_CONTINUE;
         } else if (AuthenticationStatus.NOT_DONE.equals(authenticationStatus)) {
-            // this is unprotected case.
-            status = AuthStatus.SEND_SUCCESS;
+            status = AuthStatus.SUCCESS;
         }
         return status;
     }
+
 }

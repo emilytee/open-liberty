@@ -757,11 +757,15 @@ public class SRTServletRequest implements HttpServletRequest, IExtendedRequest, 
             checkRequestObjectInUse();
         }
         // 321485
-        String addr = this._request.getRemoteAddr();
-        if (TraceComponent.isAnyTracingEnabled()&&logger.isLoggable (Level.FINE)) {  //306998.15
-            logger.logp(Level.FINE, CLASS_NAME,"getRemoteAddr", "this->"+this+": "+" address --> " + addr);
+        
+        if (this._request != null) {
+            String addr = this._request.getRemoteAddr();
+            if (TraceComponent.isAnyTracingEnabled()&&logger.isLoggable (Level.FINE)) {  //306998.15
+                logger.logp(Level.FINE, CLASS_NAME,"getRemoteAddr", "this->"+this+": "+" address --> " + addr);
+            }
+            return addr;
         }
-        return addr;
+        return null;
     }
 
     /* (non-Javadoc)
@@ -2792,7 +2796,7 @@ public class SRTServletRequest implements HttpServletRequest, IExtendedRequest, 
             checkRequestObjectInUse();
         }
         IWebAppSecurityCollaborator webAppSec=null;
-        if (getDispatchContext()!=null) {
+        if (getDispatchContext()!=null && getDispatchContext().getWebApp() != null) {
             webAppSec = CollaboratorHelperImpl.getCurrentSecurityCollaborator(getDispatchContext().getWebApp());
         } else {
             webAppSec = CollaboratorHelperImpl.getCurrentSecurityCollaborator();           
@@ -4214,7 +4218,9 @@ public class SRTServletRequest implements HttpServletRequest, IExtendedRequest, 
         if (WCCustomProperties.CHECK_REQUEST_OBJECT_IN_USE){
             checkRequestObjectInUse();
         }
-        _srtRequestHelper._InputStreamClosed=true;      
+        
+        if (_srtRequestHelper != null)
+            _srtRequestHelper._InputStreamClosed=true; 
     }
 
     /* (non-Javadoc)

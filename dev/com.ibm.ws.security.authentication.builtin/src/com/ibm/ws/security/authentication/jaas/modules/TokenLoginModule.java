@@ -11,6 +11,9 @@
 package com.ibm.ws.security.authentication.jaas.modules;
 
 import java.io.IOException;
+import java.security.Principal;
+import java.util.Hashtable;
+import java.util.Set;
 
 import javax.security.auth.Subject;
 import javax.security.auth.callback.Callback;
@@ -23,29 +26,53 @@ import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.security.auth.InvalidTokenException;
 import com.ibm.websphere.security.auth.TokenExpiredException;
+import com.ibm.websphere.security.auth.WSLoginFailedException;
+import com.ibm.websphere.security.auth.callback.WSAuthMechOidCallbackImpl;
 import com.ibm.websphere.security.auth.callback.WSCredTokenCallbackImpl;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.security.AccessIdUtil;
+import com.ibm.ws.security.authentication.AuthenticationConstants;
 import com.ibm.ws.security.authentication.AuthenticationException;
 import com.ibm.ws.security.authentication.internal.jaas.modules.ServerCommonLoginModule;
 import com.ibm.ws.security.authentication.principals.WSPrincipal;
+import com.ibm.ws.security.authentication.utility.SubjectHelper;
 import com.ibm.ws.security.jaas.common.callback.AuthenticationHelper;
+import com.ibm.ws.security.jaas.common.callback.JwtTokenCallback;
+import com.ibm.ws.security.jwtsso.token.proxy.JwtSSOTokenHelper;
 import com.ibm.ws.security.registry.UserRegistry;
 import com.ibm.ws.security.token.TokenManager;
 import com.ibm.wsspi.security.ltpa.Token;
+import com.ibm.wsspi.security.token.AttributeNameConstants;
+import com.ibm.wsspi.security.token.SingleSignonToken;
 
 /**
  * Handles token based authentication, such as Single Sign-on.
  */
+/**
+ *
+ */
 public class TokenLoginModule extends ServerCommonLoginModule implements LoginModule {
 
     private static final TraceComponent tc = Tr.register(TokenLoginModule.class);
+    private static final String LTPA_OID = "oid:1.3.18.0.2.30.2";
+    private static final String JWT_OID = "oid:1.3.18.0.2.30.3"; // ?????
     private String accessId = null;
     private Token recreatedToken;
+    private String customRealm = null;
+    private String authProvider = null;
+
+    private final String[] hashtableLoginProperties = { AttributeNameConstants.WSCREDENTIAL_UNIQUEID,
+                                                        AttributeNameConstants.WSCREDENTIAL_USERID,
+                                                        AttributeNameConstants.WSCREDENTIAL_SECURITYNAME,
+                                                        AttributeNameConstants.WSCREDENTIAL_REALM,
+                                                        AttributeNameConstants.WSCREDENTIAL_CACHE_KEY,
+                                                        AuthenticationConstants.INTERNAL_ASSERTION_KEY,
+                                                        AuthenticationConstants.INTERNAL_JSON_WEB_TOKEN,
+                                                        AuthenticationConstants.INTERNAL_AUTH_PROVIDER };
 
     /** {@inheritDoc} */
     @Override
-    @FFDCIgnore({ InvalidTokenException.class, TokenExpiredException.class })
+    @FFDCIgnore({ InvalidTokenException.class, TokenExpiredException.class, WSLoginFailedException.class })
     public boolean login() throws LoginException {
         if (isAlreadyProcessed()) {
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
@@ -57,28 +84,34 @@ public class TokenLoginModule extends ServerCommonLoginModule implements LoginMo
         try {
             Callback[] callbacks = getRequiredCallbacks(callbackHandler);
             byte[] token = ((WSCredTokenCallbackImpl) callbacks[0]).getCredToken();
-
+            String jwtToken = ((JwtTokenCallback) callbacks[2]).getToken();
             // If we have insufficient data, abstain.
-            if (token == null) {
+            if (token == null && jwtToken == null) {
                 return false;
             }
 
             setAlreadyProcessed();
 
-            byte[] credToken = AuthenticationHelper.copyCredToken(token);
-            TokenManager tokenManager = getTokenManager();
-            recreatedToken = tokenManager.recreateTokenFromBytes(credToken);
-            accessId = recreatedToken.getAttributes("u")[0];
-            if (AccessIdUtil.isServerAccessId(accessId)) {
-                setUpTemporaryServerSubject();
+            if (jwtToken != null) {
+                setUpTemporaryUserSubjectForJsonWebToken(jwtToken);
             } else {
-                setUpTemporaryUserSubject();
+                byte[] credToken = AuthenticationHelper.copyCredToken(token);
+                TokenManager tokenManager = getTokenManager();
+                recreatedToken = tokenManager.recreateTokenFromBytes(credToken);
+                accessId = recreatedToken.getAttributes("u")[0];
+                if (AccessIdUtil.isServerAccessId(accessId)) {
+                    setUpTemporaryServerSubject();
+                } else {
+                    setUpTemporaryUserSubject();
+                }
             }
             updateSharedState();
             return true;
         } catch (InvalidTokenException e) {
             throw new AuthenticationException(e.getLocalizedMessage(), e);
         } catch (TokenExpiredException e) {
+            throw new AuthenticationException(e.getLocalizedMessage(), e);
+        } catch (WSLoginFailedException e) {
             throw new AuthenticationException(e.getLocalizedMessage(), e);
         } catch (Exception e) {
             throw new AuthenticationException(e.getLocalizedMessage(), e);
@@ -87,7 +120,7 @@ public class TokenLoginModule extends ServerCommonLoginModule implements LoginMo
 
     /**
      * Gets the required Callback objects needed by this login module.
-     * 
+     *
      * @param callbackHandler
      * @return
      * @throws IOException
@@ -95,8 +128,10 @@ public class TokenLoginModule extends ServerCommonLoginModule implements LoginMo
      */
     @Override
     public Callback[] getRequiredCallbacks(CallbackHandler callbackHandler) throws IOException, UnsupportedCallbackException {
-        Callback[] callbacks = new Callback[1];
+        Callback[] callbacks = new Callback[3];
         callbacks[0] = new WSCredTokenCallbackImpl("Credential Token");
+        callbacks[1] = new WSAuthMechOidCallbackImpl("AuthMechOid");
+        callbacks[2] = new JwtTokenCallback();
         callbackHandler.handle(callbacks);
         return callbacks;
     }
@@ -109,7 +144,9 @@ public class TokenLoginModule extends ServerCommonLoginModule implements LoginMo
         temporarySubject = new Subject();
         temporarySubject.getPrivateCredentials().add(recreatedToken);
         String securityName = AccessIdUtil.getUniqueId(accessId);
-        setPrincipalAndCredentials(temporarySubject, securityName, null, accessId, WSPrincipal.AUTH_METHOD_TOKEN);
+        setWSPrincipal(temporarySubject, securityName, accessId, WSPrincipal.AUTH_METHOD_TOKEN);
+        setCredentials(temporarySubject, securityName, null);
+        setOtherPrincipals(temporarySubject, securityName, accessId, WSPrincipal.AUTH_METHOD_TOKEN, null);
     }
 
     /**
@@ -119,7 +156,7 @@ public class TokenLoginModule extends ServerCommonLoginModule implements LoginMo
      * be necessary to create a placeholder instead of a subject and modify the credentials
      * service to return a set of credentials or update the holder in order to place in
      * the shared state.
-     * 
+     *
      * @throws Exception
      */
     private void setUpTemporaryUserSubject() throws Exception {
@@ -128,7 +165,28 @@ public class TokenLoginModule extends ServerCommonLoginModule implements LoginMo
         UserRegistry ur = getUserRegistry();
         String securityName = ur.getUserSecurityName(AccessIdUtil.getUniqueId(accessId));
         securityName = getSecurityName(securityName, securityName); // Special handling for LDAP under here.
-        setPrincipalAndCredentials(temporarySubject, securityName, null, accessId, WSPrincipal.AUTH_METHOD_TOKEN);
+        setWSPrincipal(temporarySubject, securityName, accessId, WSPrincipal.AUTH_METHOD_TOKEN);
+        setCredentials(temporarySubject, securityName, null);
+        setOtherPrincipals(temporarySubject, securityName, accessId, WSPrincipal.AUTH_METHOD_TOKEN, null);
+    }
+
+    private void setUpTemporaryUserSubjectForJsonWebToken(String jwtToken) throws Exception {
+        Subject jwtPartialSubject = new Subject();
+        jwtPartialSubject = JwtSSOTokenHelper.handleJwtSSOToken(jwtToken);
+        Set<Principal> jwtPrincipals = jwtPartialSubject.getPrincipals();
+        temporarySubject = new Subject();
+        temporarySubject.getPrincipals().addAll(jwtPrincipals);
+
+        SubjectHelper subjectHelper = new SubjectHelper();
+        Hashtable<String, ?> customProperties = subjectHelper.getHashtableFromSubject(jwtPartialSubject, hashtableLoginProperties);
+        accessId = (String) customProperties.get(AttributeNameConstants.WSCREDENTIAL_UNIQUEID);
+        String securityName = (String) customProperties.get(AttributeNameConstants.WSCREDENTIAL_SECURITYNAME);
+        customRealm = (String) customProperties.get(AttributeNameConstants.WSCREDENTIAL_REALM);
+        authProvider = (String) customProperties.get(AuthenticationConstants.INTERNAL_AUTH_PROVIDER);
+
+        setWSPrincipal(temporarySubject, securityName, accessId, WSPrincipal.AUTH_METHOD_JWT_SSO_TOKEN);
+        setCredentials(temporarySubject, securityName, securityName);
+        setOtherPrincipals(temporarySubject, securityName, accessId, WSPrincipal.AUTH_METHOD_JWT_SSO_TOKEN, customProperties);
     }
 
     /** {@inheritDoc} */
@@ -140,7 +198,28 @@ public class TokenLoginModule extends ServerCommonLoginModule implements LoginMo
             return false;
         }
         setUpSubject();
+        if (customRealm != null || authProvider != null && !authProvider.endsWith("Form")) {
+            addCustomAttributesToSSOToken();
+        }
         return true;
+    }
+
+    /*
+     * Add custom realm and authProvider attributes to the ssoToken
+     */
+    private void addCustomAttributesToSSOToken() {
+        SingleSignonToken ssoToken = getSSOToken(subject);
+        if (ssoToken != null) {
+            if (customRealm != null) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "Add custom realm into SSOToken");
+                }
+                ssoToken.addAttribute(AttributeNameConstants.WSCREDENTIAL_REALM, customRealm);
+            }
+            if (authProvider != null && !authProvider.endsWith("Form")) {
+                ssoToken.addAttribute(AuthenticationConstants.INTERNAL_AUTH_PROVIDER, authProvider);
+            }
+        }
     }
 
     /** {@inheritDoc} */

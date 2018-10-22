@@ -98,14 +98,15 @@
         <property file="${basedir}/fat.bnd.properties" />
 		<script language="javascript"> <![CDATA[
 			var testBucketClassForLowJava = "componenttest.custom.junit.runner.AlwaysPassesTest";
-			var minTestJava = project.getProperty("runtime.minimum.java.level");
-			var javaVersion = project.getProperty("java.specification.version");
-			if(minTestJava != null && javaVersion < minTestJava)
+			var minTestJava = project.getProperty("fat.minimum.java.level");
+			var javaVersion = parseFloat(project.getProperty("java.specification.version"));
+			if(minTestJava != null && javaVersion < parseFloat(minTestJava))
 			  project.setProperty("test.bucket.class", testBucketClassForLowJava);
         ]]></script>
-        <echo message="runtime.minimum.java.level=${runtime.minimum.java.level}"/>
+        <echo message="fat.minimum.java.level=${fat.minimum.java.level}"/>
         <echo message="java.specification.version=${java.specification.version}"/>
         <echo message="FAT entry point will be: ${test.bucket.class}"/>
+		<echo message="micro.version=${micro.version}"/>
 	</target>
 
 	<!-- Properties used: test.bucket.name, dir.log, dir.log.xml, dir.log.tmp, local.properties, logging.properties, acute.properties, test.bucket.path, test.bucket.class -->
@@ -128,6 +129,12 @@
 		<condition property="is.windows.platform" else="false">
 			<os family="windows" />
 		</condition>
+		
+		<!-- boolean for Java9+ -->
+	    <script language="javascript">
+			var curJava = project.getProperty("java.specification.version");
+			project.setProperty("is.java9", (curJava > 8));
+	    </script>
 
 		<!-- Replace LDAP ports of all 3 Apache DS instance in configuration with updated ports from port selector and kill any apache ds related processes -->
 		<replaceLdapPorts />
@@ -192,11 +199,16 @@
 			<fileset dir="${shared.resources}">
 				<include name="junit/old/junit.jar"/>
 				<include name="jmock/2.6.0/jmock-junit4.jar"/>
-				<include name="ws-junit/ws-junit.jar"/>
 			</fileset>
+			
+			<!-- libs that were added to publish/ folder -->
+			<fileset dir="${basedir}" includes="publish/**/*.jar"/>
 			
 			<!-- add any libs that may have been added to the server -->
 			<fileset dir="${install.location}" includes="publish/servers/**/*.jar"/>
+			
+			<!-- libs that were added to publish/files/ folder -->
+			<fileset dir="${basedir}" includes="publish/files/**/*.jar"/>
 			
 			<!-- Give an opportunity to add API/SPI from the liberty image --> 
 			<fileset dir="${liberty.location}/dev/" includes="${test.classpath.wlp.include}"/>
@@ -234,7 +246,7 @@
 
 		<echo>Running ${test.bucket.name}</echo>
 		<echo>Timeout: ${fattest.timeout}</echo>
-		<iff if="debug.framework">
+		<iff if="env.debug.framework">
 			<then>
 				<!-- if we are debugging then set these values to be passed to the JVM -->
 				<property name="framework.debug.jvmarg1" value="-Xdebug" />
@@ -247,7 +259,7 @@
 				<property name="framework.debug.jvmarg2" value="-Dignore=ignore" />
 			</else>
 		</iff>
-		<iff if="debug.server">
+		<iff if="env.debug.server">
 			<then>
 				<!-- this is the debugging port for the liberty server that will be launched by the tests -->
 				<property name="server.debug.sysprop.value" value="7777" />
@@ -284,14 +296,14 @@
 		<property name="enable.server.log.validation" value="false" />
 		
 		<!-- Java 9 args to launch JUnit with -->
-		<!-- To fully override java9.args specify 'java9.args' -->
-		<!-- To add additonal args, specify 'java9.args.append' -->
-		<property name="java9.args.append" value=""/>
-		<property name="java9.args" value="--add-modules java.activation,java.xml.bind,java.xml.ws,java.xml.ws.annotation ${java9.args.append}"/>
+		<property name="java9.args" value=""/>
 		<condition property="conditional.java9.args" value="${java9.args}" else="">
 			<istrue value="${is.java9}"/>
 		</condition>
-		<echo message="Launching FAT with java 9 args: ${conditional.java9.args}"/>
+		<iff>
+		  <istrue value="${is.java9}"/>
+		  <then> <echo message="Launching FAT with java 9 args: ${conditional.java9.args}"/> </then>
+		</iff>
 
 		<!-- START coverage properties -->
 		<property name="exec.data.file" location="${dir.log.coverage}/jacoco.exec" />
@@ -374,6 +386,8 @@
 					<sysproperty key="java.protocol.handler.pkgs" value="sun.net.www.protocol|com.sun.net.ssl.internal.www.protocol" />
 					<!-- if LibertyServer.stopServer() should check messages.log for unexpected errors/warnings -->
 					<sysproperty key="enable.server.log.validation" value="${enable.server.log.validation}" />
+					<!-- Pass bundle micro version -->
+					<sysproperty key="micro.version" value="${micro.version}"/>
 					<!-- show junit where the test case is located-->
 					<classpath refid="test.bucket.path" />
 					<!-- report will be generated as xml -->
@@ -534,7 +548,7 @@
 			</fileset>
 			<report format="frames" todir="${dir.log.html}" />
 		</junitreport>
-		<echo>HTML report is available at ${dir.log.html}</echo>
+		<echo>HTML report is available at ${dir.log.html}/index.html</echo>
 	</target>
 
 	<!-- Properties used: dir.log -->

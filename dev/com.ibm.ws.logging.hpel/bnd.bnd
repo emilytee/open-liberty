@@ -42,9 +42,13 @@ instrument.disabled: true
 	com.ibm.ws.kernel.boot.cmdline;version=latest, \
 	com.ibm.ws.org.osgi.annotation.versioning;version=latest
 
+-dependson: \
+	com.ibm.ws.logging.hpel.binarylogviewer, \
+	com.ibm.ws.kernel.cmdline
+
 -testpath: \
 	../build.sharedResources/lib/junit/old/junit.jar;version=file, \
-	../build.sharedResources/lib/ws-junit/ws-junit.jar;version=file, \
+	com.ibm.ws.junit.extensions;version=latest, \
 	org.hamcrest:hamcrest-all;version=1.3, \
 	org.jmock:jmock-junit4;strategy=exact;version=2.5.1, \
 	org.jmock:jmock;strategy=exact;version=2.5.1, \

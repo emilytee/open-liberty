@@ -12,10 +12,10 @@
 
 	<featureManager>
 	    <feature>osgiconsole-1.0</feature>
-        <feature>cdi-1.2</feature>
+        <feature>cdi-2.0</feature>
         <feature>jndi-1.0</feature>
         <feature>jsp-2.3</feature>
-        <feature>servlet-3.1</feature>
+        <feature>servlet-4.0</feature>
         <feature>componentTest-1.0</feature>
         <feature>jndi-1.0</feature> 
 		<feature>localConnector-1.0</feature>
@@ -23,6 +23,7 @@
     
     <include location="../fatTestPorts.xml"/>
     
-    <application location="beanManagerLookupApp.war" />
-    <logging traceSpecification="JCDI=all=enabled:logservice=all=enabled:*=info=enabled"/>
+        <!--Java2 security-->
+    <javaPermission className="java.security.AllPermission"  name="*" actions="*" />
+    
 </server>

@@ -9,50 +9,45 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 
-apply from: '../cnf/gradle/scripts/fat.gradle'
-
-def autoFvtDir = "${projectDir}/build/libs/autoFVT"
-def publishDir = autoFvtDir + "/publish"
-
-addRequiredLibraries {
-  doLast {
-  
-    /*
-     * Copy libraries necessary for FAT runtime. 
-     */
-    copy {
-      from "${projectDir}/../com.ibm.ws.security.registry/build/libs/com.ibm.ws.security.registry.jar"
-      from "${projectDir}/../com.ibm.ws.security.registry_test.servlet/build/libs/com.ibm.ws.security.registry_test.servlet.jar"
-      into "${autoFvtDir}/lib/"
-    }
-  }
+plugins {
+  id "net.ossindex.audit" version "0.3.8-beta"
 }
 
-autoFVT {
-  doLast {
-    /*
-     * Copy the local ApacheDS LDAP instances. 
-     */
-    copy {
-      from "${projectDir}/../apache_directory_server/apacheds-2.0.0-M15"
-      into "${buildDir}/autoFVT/apacheds-2.0.0-M15"
-    }
+audit {
+    failOnError = true
+}
 
-    /*
-     * Copy the userRegistry WAR into test servers.
-     */
-    def servers = [
-      'com.ibm.ws.security.wim.core.fat.invalidBaseEntryInRealm',
-      'com.ibm.ws.security.wim.core.fat.maxSearchResult',
-      'com.ibm.ws.security.wim.core.fat.searchTimeOut',
-      'com.ibm.ws.security.wim.core.fat.dynamic'
-    ]
-    servers.each { server ->
-      copy { 
-        from "${projectDir}/../com.ibm.ws.security.registry_test.servlet/build/libs/test-application"
-        into "${publishDir}/servers/${server}/dropins"
-        include "*.war"
-      }
+dependencies { 
+  requiredLibs project(':fattest.simplicity'),
+    project(':com.ibm.ws.security.registry'),
+    project(':com.ibm.ws.security.registry_test.servlet')
+}
+
+autoFVT.doLast {
+  /*
+   * Copy the local ApacheDS LDAP instances. 
+   */
+  copy {
+    from project(':com.ibm.ws.org.apache.directory.server').projectDir
+    into autoFvtDir
+    include 'apacheds-2.0.0-M15/**'
+  }
+
+  /*
+   * Copy the userRegistry WAR into test servers.
+   */
+  def servers = [
+    'com.ibm.ws.security.wim.core.fat.invalidBaseEntryInRealm',
+    'com.ibm.ws.security.wim.core.fat.maxSearchResult',
+    'com.ibm.ws.security.wim.core.fat.searchTimeOut',
+    'com.ibm.ws.security.wim.core.fat.dynamic',
+    'com.ibm.ws.security.wim.core.fat.noreg'
+  ]
+  servers.each { server ->
+    copy {
+      from new File(project(':com.ibm.ws.security.registry_test.servlet').buildDir, 'test-application')
+      into new File(autoFvtDir, 'publish/servers/' + server + '/dropins')
+      include '*.war'
     }
   }
-}
+}  

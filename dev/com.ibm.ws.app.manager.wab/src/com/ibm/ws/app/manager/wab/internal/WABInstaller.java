@@ -19,11 +19,11 @@ import java.util.HashMap;
 import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.eclipse.equinox.region.Region;
@@ -69,6 +69,7 @@ import com.ibm.ws.container.service.app.deploy.ContainerInfo;
 import com.ibm.ws.container.service.app.deploy.ModuleInfo;
 import com.ibm.ws.container.service.app.deploy.WebModuleClassesInfo;
 import com.ibm.ws.container.service.app.deploy.extended.ApplicationInfoFactory;
+import com.ibm.ws.container.service.app.deploy.extended.ApplicationInfoForContainer;
 import com.ibm.ws.container.service.app.deploy.extended.ExtendedApplicationInfo;
 import com.ibm.ws.container.service.app.deploy.extended.ExtendedModuleInfo;
 import com.ibm.ws.container.service.app.deploy.extended.ModuleContainerInfo;
@@ -76,7 +77,12 @@ import com.ibm.ws.container.service.metadata.MetaDataException;
 import com.ibm.ws.eba.wab.integrator.EbaProvider;
 import com.ibm.ws.javaee.dd.web.WebApp;
 import com.ibm.ws.runtime.metadata.ModuleMetaData;
+import com.ibm.ws.runtime.update.RuntimeUpdateListener;
+import com.ibm.ws.runtime.update.RuntimeUpdateManager;
+import com.ibm.ws.runtime.update.RuntimeUpdateNotification;
 import com.ibm.ws.threading.FutureMonitor;
+import com.ibm.ws.threading.listeners.CompletionListener;
+import com.ibm.ws.webcontainer.osgi.webapp.WebAppConfiguration;
 import com.ibm.wsspi.adaptable.module.AdaptableModuleFactory;
 import com.ibm.wsspi.adaptable.module.Container;
 import com.ibm.wsspi.adaptable.module.Entry;
@@ -84,12 +90,14 @@ import com.ibm.wsspi.adaptable.module.NonPersistentCache;
 import com.ibm.wsspi.adaptable.module.UnableToAdaptException;
 import com.ibm.wsspi.artifact.ArtifactContainer;
 import com.ibm.wsspi.artifact.factory.ArtifactContainerFactory;
+import com.ibm.wsspi.kernel.service.location.VariableRegistry;
 import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 import com.ibm.wsspi.kernel.service.utils.FileUtils;
 import com.ibm.wsspi.kernel.service.utils.FrameworkState;
 import com.ibm.wsspi.wab.configure.WABConfiguration;
 import com.ibm.wsspi.webcontainer.extension.ExtensionFactory;
 import com.ibm.wsspi.webcontainer.extension.ExtensionProcessor;
+import com.ibm.wsspi.webcontainer.metadata.WebModuleMetaData;
 import com.ibm.wsspi.webcontainer.servlet.IServletContext;
 
 /**
@@ -166,9 +174,9 @@ import com.ibm.wsspi.webcontainer.servlet.IServletContext;
  */
 @Component(configurationPolicy = ConfigurationPolicy.IGNORE,
            immediate = true,
-           service = EventHandler.class,
+           service = {EventHandler.class, RuntimeUpdateListener.class},
            property = { "service.vendor=IBM", "event.topics=org/osgi/service/web/UNDEPLOYED" })
-public class WABInstaller implements EventHandler, ExtensionFactory {
+public class WABInstaller implements EventHandler, ExtensionFactory, RuntimeUpdateListener {
 
     private static final TraceComponent tc = Tr.register(WABInstaller.class);
     private static final String CONFIGURABLE_FILTER = "(&"
@@ -199,6 +207,7 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
     private final AtomicServiceReference<AdaptableModuleFactory> adaptableModuleFactorySRRef = new AtomicServiceReference<AdaptableModuleFactory>("AdaptableModuleFactory");
     private final AtomicServiceReference<ApplicationInfoFactory> applicationInfoFactorySRRef = new AtomicServiceReference<ApplicationInfoFactory>("ApplicationInfoFactory");
     private final AtomicServiceReference<ModuleHandler> webModuleHandlerSRRef = new AtomicServiceReference<ModuleHandler>("WebModuleHandler");
+    private final AtomicServiceReference<VariableRegistry> variableRegistrySRRef = new AtomicServiceReference<VariableRegistry>("VariableRegistry");
 
     private final AtomicBoolean deactivated = new AtomicBoolean(false);
     private final ReentrantReadWriteLock deactivationLock = new ReentrantReadWriteLock();
@@ -206,7 +215,8 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
     /**
      * A map of WABs grouped under an EBA, keyed by the EBA ID
      */
-    private final ConcurrentHashMap<String, WABGroup> wabGroups = new ConcurrentHashMap<String, WABGroup>();
+    private final ReentrantLock wabGroupsLock = new ReentrantLock();
+    private final Map<String, WABGroup> wabGroups = new HashMap<String, WABGroup>();
 
     private BundleContext ctx = null;
 
@@ -249,6 +259,8 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
         adaptableModuleFactorySRRef.activate(context);
         applicationInfoFactorySRRef.activate(context);
         webModuleHandlerSRRef.activate(context);
+        variableRegistrySRRef.activate(context);
+
         WABTrackerCustomizer customizer = new WABTrackerCustomizer(digraph);
         try {
             configurableTracker = new ServiceTracker<WABConfiguration, AtomicReference<ConfigurableWAB>>(ctx, ctx.createFilter(CONFIGURABLE_FILTER), customizer);
@@ -293,13 +305,25 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
         }
 
         //remove all the known WABs from the web container
-        for (WABGroup wabGroup : wabGroups.values()) {
+        Collection<WABGroup> toRemoveGroups;
+        wabGroupsLock.lock();
+        try {
+            toRemoveGroups = new ArrayList<>(wabGroups.values());
+        } finally {
+            wabGroupsLock.unlock();
+        }
+        for (WABGroup wabGroup : toRemoveGroups) {
             wabLifecycleDebug("Master WAB Tracker uninstalling WABGroup during deactivate", wabGroup);
             wabGroup.uninstallGroup(this);
         }
 
         //forget the wabGroups
-        wabGroups.clear();
+        wabGroupsLock.lock();
+        try {
+            wabGroups.clear();
+        } finally {
+            wabGroupsLock.unlock();
+        }
 
         // forget all our wabs.
         synchronized (knownPaths) {
@@ -318,7 +342,42 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
         adaptableModuleFactorySRRef.deactivate(context);
         applicationInfoFactorySRRef.deactivate(context);
         webModuleHandlerSRRef.deactivate(context);
+        variableRegistrySRRef.deactivate(context);
         ctx = null;
+    }
+
+    public void notificationCreated(RuntimeUpdateManager updateManager, RuntimeUpdateNotification notification) {
+      if (RuntimeUpdateNotification.CONFIG_UPDATES_DELIVERED.equals(notification.getName())) {
+            notification.onCompletion(new CompletionListener<Boolean>() {
+                public void successfulCompletion(Future<Boolean> future, Boolean result) {
+                    if (result) {
+                        List<Bundle> bundles = new ArrayList<>();
+                        wabGroupsLock.lock();
+                        try {
+                            for (WABGroup group : wabGroups.values()) {
+                                for (WAB wab : group.getWABs()) {
+                                    if (!wab.isResolvedVirtualHostValid()) {
+                                        bundles.add(wab.getBundle());
+                                    }
+                                }
+                            }
+                        } finally {
+                            wabGroupsLock.unlock();
+                        }
+                
+                        for (Bundle b : bundles) {
+                            restart(b);
+                        }
+                    }
+                }
+
+                public void failedCompletion(Future<Boolean> future, Throwable t) {}
+            });
+      }
+    }
+
+    protected String resolveVariable(String stringToResolve) {
+        return variableRegistrySRRef.getService().resolveString(stringToResolve);
     }
 
     /**
@@ -398,51 +457,83 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
                     //need to create an app info for it
                     String moduleURI = ModuleInfoUtils.getModuleURIFromLocation(modPath);
                     String moduleName = ModuleInfoUtils.getModuleName(wabContainer.adapt(WebApp.class), moduleURI);
-                    appInfo = applicationInfoFactorySRRef.getService().createApplicationInfo(modPath, moduleName, wabContainer, null, null);
+                    appInfo = applicationInfoFactorySRRef.getService().createApplicationInfo(modPath,
+                                                                                             moduleName,
+                                                                                             wabContainer,
+                                                                                             null,
+                                                                                             null,
+                                                                                             new ApplicationInfoForContainer() {
+                                                                                                 @Override
+                                                                                                 public boolean getUseJandex() {
+                                                                                                     return false;
+                                                                                                 }
+                                                                                             });
                     wab.setCreatedApplicationInfo();
                 }
                 wab.setApplicationInfo(appInfo);
 
-                WABGroup wabGroup = new WABGroup(new WABDeployedAppInfo(appInfo));
-                WABGroup existingEbaWabGroup = wabGroups.putIfAbsent(appInfo.getName(), wabGroup);
-                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                    //Note: this trace string is checked in FAT tests
-                    Tr.debug(tc, "installIntoWebContainer wabGroups.putIfAbsent(" + appInfo.getName() + " , " + wabGroup + ") ==> " + existingEbaWabGroup);
-                }
-                if (existingEbaWabGroup != null) {
-                    wabGroup = existingEbaWabGroup;
-                }
-
-                //We need to make sure that the initial addWebContainerApplication calls
-                //have completed before we try to add any new modules to the application.
-                synchronized (wabGroup) {
-                    WABDeployedAppInfo deployedApp = (WABDeployedAppInfo) wabGroup.getDeployedAppInfo();
-
-                    //add the WAB to the WAB group (we add standalone WABs to a group, but they'll only ever have one WAB in the group)
-                    wabGroup.addWab(wab, this);
-
-                    ModuleContainerInfo mci = deployedApp.createModuleContainerInfo(contextRoot, wabContainer, modPath);
-                    ModuleMetaData mmd = deployedApp.createModuleMetaData(mci, loader);
-                    ExtendedModuleInfo moduleInfo = deployedApp.getModuleInfo(mci);
-                    DeployedModuleInfo deployedMod = deployedApp.getDeployedModule(moduleInfo);
-                    wab.setDeployedModuleInfo(deployedMod);
-
-                    //deploy the module
-                    Future<Boolean> appFuture = webModuleHandler.deployModule(deployedMod, deployedApp);
-                    if (appFuture.isDone() && !appFuture.get()) {
-                        postFailureEvent(wab, "wab.install.fail", bundle, contextRoot);
-                        Tr.error(tc, "wab.install.fail", bundle, contextRoot);
-                        return false;
+                WABGroup wabGroup;
+                // Using old fashion locks here. Can revisit when we can use Java 8.
+                boolean groupsLocked = true;
+                wabGroupsLock.lock();
+                try {
+                    wabGroup = wabGroups.get(appInfo.getName());
+                    if (wabGroup == null) {
+                        wabGroup = new WABGroup(new WABDeployedAppInfo(appInfo));
+                        wabGroups.put(appInfo.getName(), wabGroup);
                     }
 
-                    //register the WAB bundle with a key that can be looked up elsewhere
-                    //based on the J2EEName form
-                    Dictionary<String, Object> bRegProps = new Hashtable<String, Object>(1);
-                    bRegProps.put("web.module.key", appInfo.getName() + "#" + moduleInfo.getName());
-                    bRegProps.put("installed.wab.contextRoot", contextRoot);
-                    bRegProps.put("installed.wab.container", wabContainer);
-                    ServiceRegistration<Bundle> reg = ctx.registerService(Bundle.class, bundle, bRegProps);
-                    wab.setRegistration(reg);
+                    if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                        //Note: this trace string is checked in FAT tests
+                        Tr.debug(tc, "installIntoWebContainer wabGroups.putIfAbsent(" + appInfo.getName() + " , " + wabGroup + ") ==> " + wabGroup);
+                    }
+
+                    //We need to make sure that the initial addWebContainerApplication calls
+                    //have completed before we try to add any new modules to the application.
+                    synchronized (wabGroup) {
+                        WABDeployedAppInfo deployedApp = (WABDeployedAppInfo) wabGroup.getDeployedAppInfo();
+
+                        //add the WAB to the WAB group (we add standalone WABs to a group, but they'll only ever have one WAB in the group)
+                        wabGroup.addWab(wab, this);
+                        groupsLocked = false;
+                        wabGroupsLock.unlock();
+
+                        ModuleContainerInfo mci = deployedApp.createModuleContainerInfo(contextRoot, wabContainer, modPath);
+                        ModuleMetaData mmd = deployedApp.createModuleMetaData(mci, loader);
+                        ExtendedModuleInfo moduleInfo = deployedApp.getModuleInfo(mci);
+                        DeployedModuleInfo deployedMod = deployedApp.getDeployedModule(moduleInfo);
+                        wab.setDeployedModuleInfo(deployedMod);
+
+                        WebAppConfiguration appConfig = (WebAppConfiguration)((WebModuleMetaData)mmd).getConfiguration();
+
+                        if (appConfig != null) {
+                          String virtualHost = wab.getVirtualHost();
+                          if (virtualHost != null) {
+                            appConfig.setVirtualHostName(virtualHost);
+                          }
+                        }
+
+                        //deploy the module
+                        Future<Boolean> appFuture = webModuleHandler.deployModule(deployedMod, deployedApp);
+                        if (appFuture.isDone() && !appFuture.get()) {
+                            postFailureEvent(wab, "wab.install.fail", bundle, contextRoot);
+                            Tr.error(tc, "wab.install.fail", bundle, contextRoot);
+                            return false;
+                        }
+
+                        //register the WAB bundle with a key that can be looked up elsewhere
+                        //based on the J2EEName form
+                        Dictionary<String, Object> bRegProps = new Hashtable<String, Object>(1);
+                        bRegProps.put("web.module.key", appInfo.getName() + "#" + moduleInfo.getName());
+                        bRegProps.put("installed.wab.contextRoot", contextRoot);
+                        bRegProps.put("installed.wab.container", wabContainer);
+                        ServiceRegistration<Bundle> reg = ctx.registerService(Bundle.class, bundle, bRegProps);
+                        wab.setRegistration(reg);
+                    }
+                } finally {
+                    if (groupsLocked) {
+                        wabGroupsLock.unlock();
+                    }
                 }
             } else {
                 postFailureEvent(wab, "wab.install.fail.container", bundle, contextRoot);
@@ -472,12 +563,27 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
         if (webModuleHandler != null) {
             //check if this is a WAB from an EBA group
             ApplicationInfo info = wab.getApplicationInfo();
-            WABGroup group = wabGroups.get(info.getName());
-            if (group != null) {
-                //synchronize on the WABGroup to match up with install
-                synchronized (group) {
-                    webModuleHandler.undeployModule(wab.getDeployedModuleInfo());
-                    group.removeWAB(wab);
+            String groupKey = info.getName();
+            WABGroup group;
+            boolean groupsLocked = true;
+            wabGroupsLock.lock();
+            try {
+                group = wabGroups.get(groupKey);
+                if (group != null) {
+                    //synchronize on the WABGroup to match up with install
+                    synchronized (group) {
+                        if (group.removeWAB(wab)) {
+                            // group is empty remove it
+                            wabGroups.remove(groupKey);
+                            groupsLocked = false;
+                            wabGroupsLock.unlock();
+                        }
+                        webModuleHandler.undeployModule(wab.getDeployedModuleInfo());
+                    }
+                }
+            } finally {
+                if (groupsLocked) {
+                    wabGroupsLock.unlock();
                 }
             }
 
@@ -554,6 +660,15 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
         webModuleHandlerSRRef.unsetReference(ref);
     }
 
+    @Reference(service = VariableRegistry.class)
+    protected void setVariableRegistry(ServiceReference<VariableRegistry> ref) {
+        variableRegistrySRRef.setReference(ref);
+    }
+
+    protected void unsetVariableRegistry(ServiceReference<VariableRegistry> ref) {
+        variableRegistrySRRef.unsetReference(ref);
+    }
+
     @Reference
     protected void setWABExtensionFactory(WABExtensionFactory extFactory) {
         extFactory.setDelegate(this);
@@ -570,6 +685,25 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
 
     protected void unsetRegionDigraph(RegionDigraph digraph) {
         // do nothing
+    }
+
+    static void restart(Bundle bundle) {
+      // if the wab bundle has been associated with this configuration then it must be restarted
+      if (bundle.getState() != Bundle.STOPPING) {
+          try {
+              bundle.stop();
+          } catch (BundleException e) {
+              // auto FFCD
+          }
+          // note that we are restarting the WAB, but it is likely there is no
+          // available configuration yet for it so it will not trigger another WAB creation until
+          // there is appropriate configuration for it.
+          try {
+              bundle.start();
+          } catch (BundleException e) {
+              // auto FFCD
+          }
+      }
     }
 
     /*
@@ -739,22 +873,7 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
                 configurableWAB.configuredContextPath = null;
                 Bundle wabBundle = configurableWAB.wabBundle;
                 if (wabBundle != null) {
-                    // if the wab bundle has been associated with this configuration then it must be restarted
-                    if (wabBundle.getState() != Bundle.STOPPING) {
-                        try {
-                            wabBundle.stop();
-                        } catch (BundleException e) {
-                            // auto FFCD
-                        }
-                        // note that we are restarting the WAB, but it is likely there is no
-                        // available configuration yet for it so it will not trigger another WAB creation until
-                        // there is appropriate configuration for it.
-                        try {
-                            wabBundle.start();
-                        } catch (BundleException e) {
-                            // auto FFCD
-                        }
-                    }
+                    restart(wabBundle);
                 } else {
                     getOrCreateConfigurableWABMap(configurableWAB.webContextPathName).remove(configurableWAB.webContextPathRegion);
                 }
@@ -926,32 +1045,36 @@ public class WABInstaller implements EventHandler, ExtensionFactory {
         }
 
         private void removeWAB(ConfigurableWAB configurable) {
-            //The installer only needs to forget about this wab..
-            //the remaining actions are now handled by the WAB itself.
-            WAB wab = configurable.wabRef.get();
-            if (wab == null) {
-                return;
-            }
-            wabLifecycleDebug("Master WAB Tracker processing shutdown for ", wab);
+            try {
+                //The installer only needs to forget about this wab..
+                //the remaining actions are now handled by the WAB itself.
+                WAB wab = configurable.wabRef.get();
+                if (wab == null) {
+                    return;
+                }
+                wabLifecycleDebug("Master WAB Tracker processing shutdown for ", wab);
 
-            //this WAB is being removed
-            synchronized (knownPaths) {
-                WABPathSpecificItemHolder holder = knownPaths.get(wab.getContextRoot());
-                if (holder != null) {
-                    synchronized (holder) {
-                        holder.getWABs().remove(wab);
+                //this WAB is being removed
+                synchronized (knownPaths) {
+                    WABPathSpecificItemHolder holder = knownPaths.get(wab.getContextRoot());
+                    if (holder != null) {
+                        synchronized (holder) {
+                            holder.getWABs().remove(wab);
+                        }
                     }
                 }
-            }
-            synchronized (wabsEligibleForCollisionResolution) {
-                WABPathSpecificItemHolder eligibleWab = wabsEligibleForCollisionResolution.get(wab.getContextRoot());
-                if (eligibleWab != null) {
-                    synchronized (eligibleWab) {
-                        eligibleWab.getWABs().remove(wab);
+                synchronized (wabsEligibleForCollisionResolution) {
+                    WABPathSpecificItemHolder eligibleWab = wabsEligibleForCollisionResolution.get(wab.getContextRoot());
+                    if (eligibleWab != null) {
+                        synchronized (eligibleWab) {
+                            eligibleWab.getWABs().remove(wab);
+                        }
                     }
                 }
+            } finally {
+                // always be sure to unconfigure the WAB bundle
+                unconfigureWABBundle(configurable);
             }
-            unconfigureWABBundle(configurable);
         }
 
         /*

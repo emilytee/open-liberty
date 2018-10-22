@@ -21,19 +21,27 @@
 
   <variable name="onError" value="FAIL"/>
 
-  <!-- TODO remove the internal attribute once managed executors are switched over to using policy executor -->
-  <!-- TODO queueFullAction needs to be removed once runIfQueueFull/maxConcurrencyAppliesToCallerThread are implemented. Until then,
-       queueFullAction only partially approximates the behavior for some scenarios -->
+  <concurrencyPolicy id="defaultConcurrencyPolicy" max="1" maxQueueSize="1" maxWaitForEnqueue="2m"/>
 
-  <managedExecutorService id="DefaultManagedExecutorService" policyExecutor.internal.prototype.do.not.use="enabled-for-internal-testing-only"
-   maxConcurrency="1" maxQueueSize="1" maxWaitForEnqueue="120000" queueFullAction="CallerRuns"/>
+  <concurrencyPolicy id="longrunning" max="2" maxPolicy="strict" maxQueueSize="2" maxWaitForEnqueue="20s" startTimeout="1m"/>
 
-  <managedScheduledExecutorService id="DefaultManagedScheduledExecutorService" policyExecutor.internal.prototype.do.not.use="enabled-for-internal-testing-only"
-   maxConcurrency="2" maxConcurrencyAppliesToCallerThread="true" maxQueueSize="1" queueFullAction="CallerRuns" runIfQueueFull="true"/>
+  <concurrencyPolicy id="normal" expedite="1" max="2" maxPolicy="loose" maxQueueSize="2" runIfQueueFull="false"/>
 
-  <managedExecutorService id="executor1" jndiName="concurrent/executor1" policyExecutor.internal.prototype.do.not.use="enabled-for-internal-testing-only"
-   maxConcurrency="1" maxConcurrencyAppliesToCallerThread="true" maxQueueSize="1" maxWaitForEnqueue="0" queueFullAction="Abort"/>
+  <contextService id="jeeMetadataOnly">
+    <jeeMetadataContext/>
+  </contextService>
 
-  <managedScheduledExecutorService jndiName="concurrent/scheduledExecutor2" policyExecutor.internal.prototype.do.not.use="enabled-for-internal-testing-only"
-   coreConcurrency="1" maxConcurency="2" maxConcurrencyAppliesToCallerThread="false" maxQueueSize="2" queueFullAction="CallerRuns" runIfQueueFull="false"/>
+  <managedScheduledExecutorService id="DefaultManagedScheduledExecutorService">
+   <concurrencyPolicy expedite="0" max="4" maxPolicy="strict" maxQueueSize="1" runIfQueueFull="true"/>
+  </managedScheduledExecutorService>
+
+  <managedExecutorService id="executor1" jndiName="concurrent/executor1" contextServiceRef="jeeMetadataOnly">
+   <concurrencyPolicy max="1" maxPolicy="strict" maxQueueSize="1" maxWaitForEnqueue="0" runIfQueueFull="false"/>
+   <longRunningPolicy max="1" maxPolicy="strict" maxQueueSize="1"/>
+  </managedExecutorService>
+
+  <managedScheduledExecutorService jndiName="concurrent/scheduledExecutor2" concurrencyPolicyRef="normal" contextServiceRef="jeeMetadataOnly"/>
+
+  <managedExecutorService id="executor2" jndiName="concurrent/executor2" concurrencyPolicyRef="normal" longRunningPolicyRef="longrunning"/>
+
 </server>

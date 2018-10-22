@@ -92,8 +92,6 @@ public class StatisticsMeterTest {
         assertEquals("Incorrect min", (long) offset, statsMeter.getMinimumValue());
         assertEquals("Incorrect max", (long) Math.max(offset - 1 + Math.min(loopCount, modulo), offset), statsMeter.getMaximumValue());
         assertEquals("Incorrect total", calculateSum(dataPoints), statsMeter.getTotal(), STANDARD_EPSILON);
-        assertEquals("Incorrect mean", calculateMean(dataPoints), statsMeter.getMean(), STANDARD_EPSILON);
-        assertEquals("Incorrect variance", calculateVariance(dataPoints), statsMeter.getVariance(), STANDARD_EPSILON);
     }
 
     @Test

@@ -13,7 +13,6 @@ package com.ibm.wsspi.http.ee8;
 import java.util.Set;
 
 import com.ibm.wsspi.genericbnf.HeaderField;
-import com.ibm.wsspi.http.HttpCookie;
 
 /**
  * Implemented by the webcontainer for creating push requests.
@@ -23,8 +22,6 @@ public interface Http2PushBuilder {
 
     Set<HeaderField> getHeaders();
 
-    Set<HttpCookie> getCookies();
-
     String getURI();
 
     String getQueryString();
@@ -32,5 +29,7 @@ public interface Http2PushBuilder {
     String getSessionId();
 
     String getPath();
+
+    String getPathQueryString();
 
 }

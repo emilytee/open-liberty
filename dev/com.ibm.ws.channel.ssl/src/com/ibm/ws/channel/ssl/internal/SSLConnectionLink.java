@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2008 IBM Corporation and others.
+ * Copyright (c) 1997, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -24,8 +24,10 @@ import javax.net.ssl.SSLEngineResult.HandshakeStatus;
 import javax.net.ssl.SSLException;
 
 import com.ibm.websphere.channelfw.FlowType;
+import com.ibm.websphere.channelfw.osgi.CHFWBundle;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.ws.channel.ssl.internal.SSLAlpnNegotiator.ThirdPartyAlpnNegotiator;
 import com.ibm.ws.ffdc.FFDCFilter;
 import com.ibm.wsspi.bytebuffer.WsByteBuffer;
 import com.ibm.wsspi.bytebuffer.WsByteBufferUtils;
@@ -51,10 +53,9 @@ import com.ibm.wsspi.tcpchannel.TCPWriteRequestContext;
 public class SSLConnectionLink extends OutboundProtocolLink implements ConnectionLink, TCPConnectionContext {
 
     /** Trace component for WAS. Protect for use by inner classes. */
-    protected static final TraceComponent tc =
-                    Tr.register(SSLConnectionLink.class,
-                                SSLChannelConstants.SSL_TRACE_NAME,
-                                SSLChannelConstants.SSL_BUNDLE);
+    protected static final TraceComponent tc = Tr.register(SSLConnectionLink.class,
+                                                           SSLChannelConstants.SSL_TRACE_NAME,
+                                                           SSLChannelConstants.SSL_BUNDLE);
 
     /** VC statemap key used for the connlink configuration */
     public static final String LINKCONFIG = "SSLLINKCONFIG";
@@ -93,6 +94,12 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
     private SSLContext sslContext = null;
     /** Target address for outbound connects. */
     private TCPConnectRequestContext targetAddress = null;
+    /** ALPN protocol negotiated for this link */
+    private String alpnProtocol;
+    /** Keep track of HTTP/2 support on this link */
+    private boolean http2Enabled = false;
+    /** The third party ALPN negotiator used for this link */
+    private ThirdPartyAlpnNegotiator alpnNegotiator = null;
 
     private final Lock cleanupLock = new ReentrantLock();
 
@@ -100,7 +107,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
      * Constructor. Fields assigned here stay the same for the life of
      * the connection link, even across uses from the connection pool. Before
      * the link is used, the init method will be called.
-     * 
+     *
      * @param inputChannel
      */
     public SSLConnectionLink(SSLChannel inputChannel) {
@@ -123,6 +130,19 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
         initInterfaces(new SSLConnectionContextImpl(this, !isInbound),
                        new SSLReadServiceContext(this),
                        new SSLWriteServiceContext(this));
+
+        // Check to see if http/2 is enabled for this connection and save the result
+        if (CHFWBundle.getServletConfiguredHttpVersionSetting() != null) {
+            if (SSLChannelConstants.OPTIONAL_DEFAULT_OFF_20.equalsIgnoreCase(CHFWBundle.getServletConfiguredHttpVersionSetting())) {
+                if (getChannel().getUseH2ProtocolAttribute() != null && getChannel().getUseH2ProtocolAttribute()) {
+                    http2Enabled = true;
+                }
+            } else if (SSLChannelConstants.OPTIONAL_DEFAULT_ON_20.equalsIgnoreCase(CHFWBundle.getServletConfiguredHttpVersionSetting())) {
+                if (getChannel().getUseH2ProtocolAttribute() == null || getChannel().getUseH2ProtocolAttribute()) {
+                    http2Enabled = true;
+                }
+            }
+        }
 
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.exit(tc, "init");
@@ -256,7 +276,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
      * run. The second case where this method may be called is if this connection
      * link is part of an outbound chain. In that case, this method will be called
      * when the initial outbound connect reports back success.
-     * 
+     *
      * @see com.ibm.wsspi.channelfw.ConnectionReadyCallback#ready(VirtualConnection)
      */
     @Override
@@ -285,7 +305,8 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
                         // Discrimination has not happened yet. Create new SSL engine.
                         sslEngine = SSLUtils.getSSLEngine(sslContext,
                                                           sslChannel.getConfig().getFlowType(),
-                                                          getLinkConfig());
+                                                          getLinkConfig(),
+                                                          this);
                     }
                 } else {
                     // Outbound connect is ready. Ensure we have an sslContext and sslEngine.
@@ -296,7 +317,8 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
                         sslEngine = SSLUtils.getOutboundSSLEngine(
                                                                   sslContext, getLinkConfig(),
                                                                   targetAddress.getRemoteAddress().getHostName(),
-                                                                  targetAddress.getRemoteAddress().getPort());
+                                                                  targetAddress.getRemoteAddress().getPort(),
+                                                                  this);
                     }
                 }
                 if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
@@ -313,10 +335,16 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
                     readyOutbound(inVC, true);
                 }
             } catch (Exception e) {
-                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                    Tr.debug(tc, "Caught exception during ready, " + e, e);
+                if (FrameworkState.isStopping()) {
+                    if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                        Tr.debug(tc, "Ignoring exception during server shutdown: " + e);
+                    }
+                } else {
+                    if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                        Tr.debug(tc, "Caught exception during ready, " + e, e);
+                    }
+                    FFDCFilter.processException(e, getClass().getName(), "238", this);
                 }
-                FFDCFilter.processException(e, getClass().getName(), "238", this);
                 close(inVC, e);
             }
         } else {
@@ -349,7 +377,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
         /**
          * Constructor.
-         * 
+         *
          * @param _connLink SSLConnectionLink associated with this callback.
          * @param _netBuffer Buffer from the network / device side.
          * @param _decryptedNetBuffer Buffer containing results of decrypting netbuffer
@@ -437,7 +465,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * Handle work required by the ready method for inbound connections.
-     * 
+     *
      * @param inVC
      */
     private void readyInbound(VirtualConnection inVC) {
@@ -513,11 +541,11 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
                 if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
                     Tr.event(tc,
                              "After unwrap\r\n\tnetBuf: " + SSLUtils.getBufferTraceInfo(netBuffer)
-                                             + "\r\n\tdecBuf: " + SSLUtils.getBufferTraceInfo(decryptedNetBuffer)
-                                             + "\r\n\tstatus=" + result.getStatus()
-                                             + " HSstatus=" + result.getHandshakeStatus()
-                                             + " consumed=" + result.bytesConsumed()
-                                             + " produced=" + result.bytesProduced());
+                                 + "\r\n\tdecBuf: " + SSLUtils.getBufferTraceInfo(decryptedNetBuffer)
+                                 + "\r\n\tstatus=" + result.getStatus()
+                                 + " HSstatus=" + result.getHandshakeStatus()
+                                 + " consumed=" + result.bytesConsumed()
+                                 + " produced=" + result.bytesProduced());
                 }
 
                 // If adjustments were made for the JSSE, restore them.
@@ -531,9 +559,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
             }
 
             // Build a callback for the asynchronous SSL handshake
-            MyHandshakeCompletedCallback callback = new MyHandshakeCompletedCallback(
-                            this, netBuffer, decryptedNetBuffer,
-                            encryptedAppBuffer, FlowType.INBOUND);
+            MyHandshakeCompletedCallback callback = new MyHandshakeCompletedCallback(this, netBuffer, decryptedNetBuffer, encryptedAppBuffer, FlowType.INBOUND);
             // Continue the SSL handshake. Do this with asynchronous handShake
             result = SSLUtils.handleHandshake(this, netBuffer, decryptedNetBuffer,
                                               encryptedAppBuffer, result, callback, false);
@@ -600,7 +626,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
         /**
          * Constructor.
-         * 
+         *
          * @param _decryptedNetBuffer
          */
         public MyReadCompletedCallback(WsByteBuffer _decryptedNetBuffer) {
@@ -648,7 +674,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * This method is called after the SSL handshake has taken place.
-     * 
+     *
      * @param netBuffer
      * @param decryptedNetBuffer
      * @param encryptedAppBuffer
@@ -668,6 +694,8 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
         encryptedAppBuffer.release();
 
         if (hsStatus == HandshakeStatus.FINISHED) {
+            AlpnSupportUtils.getAlpnResult(getSSLEngine(), this);
+
             // PK16095 - take certain actions when the handshake completes
             getChannel().onHandshakeFinish(getSSLEngine());
 
@@ -717,7 +745,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
      * Handle work required by the ready method for outbound connections. When called, the
      * outbound socket has been established. Establish the SSL connection before reporting
      * to the next channel. Note, this method is called in both sync and async flows.
-     * 
+     *
      * @param inVC virtual connection associated with this request
      * @param async flag for asynchronous (true) or synchronous (false)
      * @throws IOException
@@ -743,8 +771,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
         // Only create the callback if this is for an async request.
         if (async) {
-            callback = new MyHandshakeCompletedCallback(this, netBuffer,
-                            decryptedNetBuffer, encryptedAppBuffer, FlowType.OUTBOUND);
+            callback = new MyHandshakeCompletedCallback(this, netBuffer, decryptedNetBuffer, encryptedAppBuffer, FlowType.OUTBOUND);
         }
 
         try {
@@ -800,7 +827,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
     /**
      * This method is called to handle the results of an SSL handshake. This may be called
      * by a callback or in the same thread as the connect request.
-     * 
+     *
      * @param netBuffer buffer for data flowing in fron the net
      * @param decryptedNetBuffer buffer for decrypted data from the net
      * @param encryptedAppBuffer buffer for encrypted data flowing from the app
@@ -829,6 +856,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
             }
             exception = new IOException("Unexpected results of handshake after connect, " + hsStatus);
         }
+        AlpnSupportUtils.getAlpnResult(getSSLEngine(), this);
 
         // PK16095 - take certain actions when the handshake completes
         getChannel().onHandshakeFinish(getSSLEngine());
@@ -837,7 +865,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
         getDeviceReadInterface().setBuffers(null);
 
         // Clean up the buffers.
-        // PI48725 Start      
+        // PI48725 Start
         // Handshake complete.  Now get the request.  Use our read interface so unwrap already done.
         // Check if data exists in the network buffer still.  This would be app data beyond handshake.
         if (netBuffer.remaining() == 0 || netBuffer.position() == 0) {
@@ -899,7 +927,8 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
         sslEngine = SSLUtils.getOutboundSSLEngine(
                                                   sslContext, getLinkConfig(),
                                                   targetAddress.getRemoteAddress().getHostName(),
-                                                  targetAddress.getRemoteAddress().getPort());
+                                                  targetAddress.getRemoteAddress().getPort(),
+                                                  this);
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
             Tr.debug(tc, "New SSL engine=" + getSSLEngine().hashCode() + " for vc=" + getVCHash());
         }
@@ -955,7 +984,8 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
             // PK46069 - use engine that allows session id re-use
             this.sslEngine = SSLUtils.getOutboundSSLEngine(sslContext, getLinkConfig(),
                                                            targetAddress.getRemoteAddress().getHostName(),
-                                                           targetAddress.getRemoteAddress().getPort());
+                                                           targetAddress.getRemoteAddress().getPort(),
+                                                           this);
         }
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
             Tr.debug(tc, "SSL engine hc=" + getSSLEngine().hashCode() + " associated with vc=" + getVCHash());
@@ -1083,7 +1113,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * Fetch the SSL channel that created this link.
-     * 
+     *
      * @return SSL channel
      */
     public SSLChannel getChannel() {
@@ -1092,7 +1122,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * Fetch the SSL engine associated with this link.
-     * 
+     *
      * @return SSL engine
      */
     public SSLEngine getSSLEngine() {
@@ -1101,7 +1131,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * Query the appropriate application buffer size for this connection.
-     * 
+     *
      * @return int
      */
     public int getAppBufferSize() {
@@ -1110,7 +1140,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * Query the appropriate packet buffer size for this connection.
-     * 
+     *
      * @return int
      */
     public int getPacketBufferSize() {
@@ -1119,7 +1149,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * Fetch the read interface for the channel on the device side
-     * 
+     *
      * @return device side channel read interface
      */
     public TCPReadRequestContext getDeviceReadInterface() {
@@ -1128,7 +1158,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * Fetch the write interface for the channel on the device side
-     * 
+     *
      * @return device side channel write interface
      */
     public TCPWriteRequestContext getDeviceWriteInterface() {
@@ -1193,7 +1223,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * Set the connection specific configuration to the input value.
-     * 
+     *
      * @param config
      */
     protected void setLinkConfig(SSLLinkConfig config) {
@@ -1202,7 +1232,7 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * Query the current connection specific configuration.
-     * 
+     *
      * @return SSLLinkConfig
      */
     public SSLLinkConfig getLinkConfig() {
@@ -1211,11 +1241,55 @@ public class SSLConnectionLink extends OutboundProtocolLink implements Connectio
 
     /**
      * Query the hash of the virtual connection, used for debug.
-     * 
+     *
      * @return int
      */
     protected int getVCHash() {
         return this.vcHashCode;
     }
 
+    /**
+     * Set the ALPN protocol negotiated for this link
+     *
+     * @param String protocol
+     */
+    public void setAlpnProtocol(String protocol) {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            Tr.debug(tc, "setAlpnProtocol: " + protocol + " " + this);
+        }
+        this.alpnProtocol = protocol;
+        this.sslConnectionContext.setAlpnProtocol(protocol);
+    }
+
+    /**
+     * The ALPN protocol negotiated for this link
+     *
+     * @return the protocol String, or null if ALPN was not used
+     */
+    public String getAlpnProtocol() {
+        return this.alpnProtocol;
+    }
+
+    /**
+     * @return true if http/2 and ALPN are enabled
+     */
+    protected boolean isAlpnEnabled() {
+        return this.http2Enabled;
+    }
+
+    /**
+     * Set the negotiator object that will be used during protocol negotiation. Only needed for grizzly-npn and jetty-alpn
+     *
+     * @param ThirdPartyAlpnNegotiator to use for this connection
+     */
+    protected void setAlpnNegotiator(ThirdPartyAlpnNegotiator negotiator) {
+        this.alpnNegotiator = negotiator;
+    }
+
+    /**
+     * @return ThirdPartyAlpnNegotiator used for this connection
+     */
+    protected ThirdPartyAlpnNegotiator getAlpnNegotiator() {
+        return this.alpnNegotiator;
+    }
 }

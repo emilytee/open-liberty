@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.osgi.framework.Bundle;
@@ -37,11 +38,9 @@ import com.ibm.ws.kernel.feature.provisioning.ProvisioningFeatureDefinition;
 import com.ibm.ws.kernel.feature.provisioning.SubsystemContentType;
 import com.ibm.ws.kernel.provisioning.BundleRepositoryRegistry.BundleRepositoryHolder;
 import com.ibm.ws.kernel.provisioning.VersionUtility;
+import com.ibm.ws.kernel.service.util.JavaInfo;
 import com.ibm.wsspi.kernel.service.location.WsResource;
 
-/**
- *
- */
 public class BundleList {
     private static final String CACHE_WRITE_TIME = "Cache-WriteTime";
     private static final TraceComponent tc = Tr.register(BundleList.class);
@@ -49,6 +48,7 @@ public class BundleList {
     private final AtomicBoolean stale = new AtomicBoolean(false);
     private final List<RuntimeFeatureResource> resources = new ArrayList<RuntimeFeatureResource>();
     private long writeTime;
+    private Integer javaSpecVersion;
     private final FeatureManager featureManager;
 
     public static interface FeatureResourceHandler {
@@ -139,48 +139,29 @@ public class BundleList {
             return fr.toString() + ((location != null) ? '@' + location : "");
         }
 
-        /**
-         * @param bundle
-         */
         public void setBundle(Bundle bundle) {
             this.bundle = bundle;
             bundleId = bundle.getBundleId();
         }
 
-        /**
-         * @param resource
-         */
         public void setResource(WsResource resource) {
             this.resource = resource;
         }
 
-        /**
-         * @param level
-         */
         public void setStartLevel(int level) {
             startLevel = level;
         }
 
-        /**
-         * @return
-         */
         @Trivial
         public Bundle getBundle() {
             return bundle;
         }
 
-        /**
-         * 
-         */
         @Trivial
         public long getBundleId() {
             return bundleId;
         }
 
-        /**
-         * @return
-         * @throws MalformedURLException
-         */
         public String getResolvedLocation(FeatureManager featureManager) throws MalformedURLException {
             if (resource != null) {
                 String productName = "";
@@ -223,6 +204,13 @@ public class BundleList {
         /** {@inheritDoc} */
         @Override
         public boolean equals(Object obj) {
+            // IMPLEMENTATION NOTE: this equals is really only correct for managing
+            // the BundleList.resources collection when trying to avoid adding duplicates
+            // Note that this does not include checking for all attributes of the
+            // FeatureResource by design.  For example start level and requiredOSGiEE
+            // TODO this does imply we don't have a good strategy for when two features
+            // try to set different start levels for the same bundle.  Which start-level
+            // gets used will look to be random.
             if (this == obj)
                 return true;
             if (obj == null)
@@ -231,13 +219,8 @@ public class BundleList {
                 RuntimeFeatureResource other = (RuntimeFeatureResource) obj;
                 if (bundle == other.bundle && bundle != null)
                     return true;
-                String thisRepo = getBundleRepositoryType();
-                String otherRepo = other.getBundleRepositoryType();
-                if (thisRepo != null && !thisRepo.equals(otherRepo)) {
+                if (!Objects.equals(getBundleRepositoryType(), other.getBundleRepositoryType()))
                     return false;
-                } else if (otherRepo != null && !otherRepo.equals(thisRepo)) {
-                    return false;
-                }
 
                 if (bundle != other.bundle && (bundle == null || other.bundle == null)) {
                     Bundle b = (bundle == null) ? other.bundle : bundle;
@@ -293,6 +276,11 @@ public class BundleList {
         public List<String> getTolerates() {
             return fr.getTolerates();
         }
+
+        @Override
+        public Integer getRequireJava() {
+            return fr.getRequireJava();
+        }
     }
 
     private static final class CachedFeatureResource implements FeatureResource {
@@ -331,7 +319,7 @@ public class BundleList {
             range = VersionUtility.stringToVersionRange(vRange);
 
             int ix3 = value.lastIndexOf(';');
-            // Check index value for backwards compatibility - bundle start level was not always cached  
+            // Check index value for backwards compatibility - bundle start level was not always cached
             if (ix3 != -1) {
                 location = value.substring(0, ix3);
                 this.startLevel = Integer.valueOf(value.substring(ix3 + 1));
@@ -436,19 +424,18 @@ public class BundleList {
             return Collections.emptyList();
         }
 
+        @Override
+        public Integer getRequireJava() {
+            return null;
+        }
+
     }
 
-    /**
-     * @param bundleCacheFile
-     */
     public BundleList(WsResource bundleCacheFile, FeatureManager featureManager) {
         cacheFile = bundleCacheFile;
         this.featureManager = featureManager;
     }
 
-    /**
-     * 
-     */
     public BundleList(FeatureManager featureManager) {
         cacheFile = null;
         this.featureManager = featureManager;
@@ -463,18 +450,12 @@ public class BundleList {
         }
     }
 
-    /**
-     * 
-     */
     public void dispose() {
         if (stale.get())
             store();
         resources.clear();
     }
 
-    /**
-     * @param newBundleList
-     */
     public void addAllNoReplace(BundleList newBundleList) {
         for (RuntimeFeatureResource r : newBundleList.resources) {
             if (!!!resources.contains(r))
@@ -485,9 +466,9 @@ public class BundleList {
 
     /**
      * This is like retain all except it returns a list of what was removed.
-     * 
+     *
      * TODO remove the bundles.
-     * 
+     *
      * @param newBundleList
      * @return
      */
@@ -501,17 +482,10 @@ public class BundleList {
         return result;
     }
 
-    /**
-     * @return
-     */
     public boolean isEmpty() {
         return resources.isEmpty();
     }
 
-    /**
-     * @param res
-     * @throws IOException
-     */
     private void load(WsResource res, FeatureManager featureManager) throws IOException {
         if (res == null || !res.exists())
             return;
@@ -522,7 +496,7 @@ public class BundleList {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.startsWith(CACHE_WRITE_TIME)) {
-                    readWriteTime(res, line);
+                    readWriteTimeAndJavaSpecVersion(res, line);
                 } else {
                     int index = line.indexOf('=');
                     if (index != -1) {
@@ -536,17 +510,18 @@ public class BundleList {
         }
     }
 
-    /**
-     * @param res
-     * @param line
-     */
     // ignore the NumberFormatException as we deal with it.
     @FFDCIgnore(NumberFormatException.class)
-    private void readWriteTime(WsResource res, String line) {
-        int index = line.indexOf('=');
-        if (index != -1) {
+    private void readWriteTimeAndJavaSpecVersion(WsResource res, String line) {
+        int timeIndex = line.indexOf('=');
+        int javaSpecVersionIndex = timeIndex >= 0 ? line.indexOf(';', timeIndex) : -1;
+        if (timeIndex != -1) {
             try {
-                writeTime = Long.parseLong(line.substring(index + 1));
+                String sTime = javaSpecVersionIndex > timeIndex ? line.substring(timeIndex + 1, javaSpecVersionIndex) : line.substring(timeIndex + 1);
+                writeTime = Long.parseLong(sTime);
+                if (javaSpecVersionIndex != -1) {
+                    javaSpecVersion = Integer.valueOf(line.substring(javaSpecVersionIndex + 1));
+                }
             } catch (NumberFormatException nfe) {
             }
         }
@@ -556,9 +531,6 @@ public class BundleList {
         }
     }
 
-    /**
-     * 
-     */
     public synchronized void store() {
         if (cacheFile != null) {
             OutputStream out = null;
@@ -569,6 +541,8 @@ public class BundleList {
                 writer.write('=');
                 writeTime = System.currentTimeMillis();
                 writer.write(String.valueOf(writeTime));
+                writer.write(';');
+                writer.write(JavaInfo.majorVersion());
                 writer.write(FeatureDefinitionUtils.NL);
                 for (RuntimeFeatureResource entry : resources) {
                     if (entry.getURLString() != null) {
@@ -600,20 +574,17 @@ public class BundleList {
         }
     }
 
-    /**
-     * @param fdefinition
-     */
     public void addAll(ProvisioningFeatureDefinition fdefinition, FeatureManager featureManager) {
         for (FeatureResource fr : fdefinition.getConstituents(SubsystemContentType.BUNDLE_TYPE)) {
             RuntimeFeatureResource rfr = (RuntimeFeatureResource) ((fr instanceof RuntimeFeatureResource) ? fr : new RuntimeFeatureResource(fr));
-            resources.add(rfr);
+            // only add bundles that match the current osgi.ee capability
+            if (!featureManager.missingRequiredJava(rfr)) {
+                resources.add(rfr);
+            }
         }
         stale.set(true);
     }
 
-    /**
-     * @param featureResourceHandler
-     */
     public void foreach(FeatureResourceHandler featureResourceHandler) {
         for (FeatureResource fr : resources) {
             if (!!!featureResourceHandler.handle(fr)) {
@@ -622,12 +593,6 @@ public class BundleList {
         }
     }
 
-    /**
-     * @param fr
-     * @param bundle
-     * @param resource
-     * @param level
-     */
     public void createAssociation(FeatureResource fr, Bundle bundle, WsResource resource, int level) {
         if (fr instanceof RuntimeFeatureResource) {
             RuntimeFeatureResource rfr = (RuntimeFeatureResource) fr;
@@ -664,5 +629,9 @@ public class BundleList {
         }
 
         return b;
+    }
+
+    public Integer getJavaSpecVersion() {
+        return javaSpecVersion;
     }
 }

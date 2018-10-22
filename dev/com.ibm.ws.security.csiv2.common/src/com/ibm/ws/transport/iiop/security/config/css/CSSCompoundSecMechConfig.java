@@ -16,6 +16,9 @@ package com.ibm.ws.transport.iiop.security.config.css;
 import java.io.Serializable;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.security.AccessController;
+import java.security.PrivilegedActionException;
+import java.security.PrivilegedExceptionAction;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -138,14 +141,21 @@ public class CSSCompoundSecMechConfig implements Serializable {
     private boolean extractSSLTransportForEachAddress(TSSCompoundSecMechConfig requirement) {
 
         //from the requirement get the addresses
-        TSSSSLTransportConfig transportConfig = (TSSSSLTransportConfig) requirement.getTransport_mech();
-        TransportAddress[] addresses = transportConfig.getTransportAddresses();
+	Object transportConfig = requirement.getTransport_mech();
+	
+	//If SSL is not enabled, return false 
+	if (!(transportConfig instanceof TSSSSLTransportConfig)) {
+	    return false;
+	}
+
+        TransportAddress[] addresses = ((TSSSSLTransportConfig)transportConfig).getTransportAddresses();
         if (addresses.length == 0) {
             return false;
         }
 
         for (TransportAddress addr : addresses) {
             int sslPort = addr.port;
+            final String addrHost = addr.host_name;
             String sslHost = addr.host_name;
             InetAddress ina = null;
             String sslCfgAlias = null;
@@ -155,10 +165,23 @@ public class CSSCompoundSecMechConfig implements Serializable {
             short localRequires = requires;
 
             try {
-                ina = InetAddress.getByName(sslHost);
-                sslHost = ina.getCanonicalHostName();
-            } catch (UnknownHostException e) {
-                // What to do with this exception???
+                sslHost = AccessController.doPrivileged(new PrivilegedExceptionAction<String>() {
+                    @Override
+                    public String run() throws Exception {
+                        InetAddress ina = InetAddress.getByName(addrHost);
+                        return ina.getCanonicalHostName();
+                    }
+                });
+            } catch (PrivilegedActionException e) {
+                try {
+                    throw e.getException();
+                } catch (UnknownHostException uhe) {
+                    continue;
+                } catch (RuntimeException re) {
+                    throw re;
+                } catch (Exception e2) {
+                    throw new RuntimeException("Unexpected exception", e2);
+                }
             }
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                 Tr.debug(tc, "get sslConfig for target " + sslHost + ":" + sslPort);

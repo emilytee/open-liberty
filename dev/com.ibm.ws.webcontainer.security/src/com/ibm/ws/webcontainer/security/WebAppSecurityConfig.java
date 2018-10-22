@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011 IBM Corporation and others.
+ * Copyright (c) 2011, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -11,6 +11,7 @@
 package com.ibm.ws.webcontainer.security;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Encapsulate the web application security settings.
@@ -76,7 +77,25 @@ public interface WebAppSecurityConfig {
      */
     String getChangedProperties(WebAppSecurityConfig original);
 
+    /**
+     * Calculates the delta between this WebAppSecurityConfig and the provided
+     * WebAppSecurityConfig. The values returned are the values from this Object.
+     * If no properties were changed, an empty Map should be returned.
+     *
+     * @param webAppSecConfig WebAppSecurityConfig object to compare settings against
+     * @return Map of modified attributes. key is the name of modified attributes, and value is this object.
+     *         if the value is not set, the empty string is set.
+     */
+    Map<String, String> getChangedPropertiesMap(WebAppSecurityConfig original);
+
     String getLoginFormURL();
+
+    /**
+     * Returns loginErrorURL metadata in webAppSecurity.
+     *
+     * @return String the URL of the global login error page.
+     */
+    String getLoginErrorURL();
 
     /**
      * Is failover to FORM from CLIENT_CERT allowed?
@@ -84,6 +103,13 @@ public interface WebAppSecurityConfig {
      * @return {@code true} if FORM failover is allowed
      */
     boolean getAllowFailOverToFormLogin();
+
+    /**
+     * Is failover to the application defined (either login config or JSR375 HAM) from CLIENT_CERT allowed?
+     *
+     * @return {@code true} if failover to applicatioin defined is allowed
+     */
+    boolean getAllowFailOverToAppDefined();
 
     /**
      * Is any failover from CLIENT_CERT allowed?
@@ -107,4 +133,19 @@ public interface WebAppSecurityConfig {
     ReferrerURLCookieHandler createReferrerURLCookieHandler();
 
     WebAuthenticatorProxy createWebAuthenticatorProxy();
+
+    /**
+     * Returns the value of overrideHttpAuthMethod
+     */
+    String getOverrideHttpAuthMethod();
+
+    /**
+     * Returns the value of loginFormContextRoot
+     */
+    String getLoginFormContextRoot();
+
+    /**
+     * Returns the value of basicAuthRealmName
+     */
+    String getBasicAuthRealmName();
 }

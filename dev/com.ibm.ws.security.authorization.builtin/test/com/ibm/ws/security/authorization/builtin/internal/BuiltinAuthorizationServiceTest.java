@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011 IBM Corporation and others.
+ * Copyright (c) 2011, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -37,8 +37,6 @@ import org.osgi.framework.Constants;
 import org.osgi.framework.ServiceReference;
 import org.osgi.service.component.ComponentContext;
 
-import test.common.SharedOutputManager;
-
 import com.ibm.websphere.security.auth.CredentialDestroyedException;
 import com.ibm.websphere.security.cred.WSCredential;
 import com.ibm.ws.security.authentication.principals.WSPrincipal;
@@ -46,6 +44,8 @@ import com.ibm.ws.security.authorization.AccessDecisionService;
 import com.ibm.ws.security.authorization.AuthorizationTableService;
 import com.ibm.ws.security.authorization.RoleSet;
 import com.ibm.ws.security.context.SubjectManager;
+
+import test.common.SharedOutputManager;
 
 /**
  *
@@ -66,8 +66,11 @@ public class BuiltinAuthorizationServiceTest {
     private final static String role1 = "Manager";
     private final static String subject1 = "user1";
     private final static String accessId1 = "user:BasicRealm/user1";
-    private final static String groupAccessId1 = "group:realm/group1";
+    private final static String realmName1 = "BasicRealm";
+    private final static String groupAccessId1 = "group:BasicRealm/group1";
     private final static String roleAllAuthen = "Employee";
+    private final static String COMPONENT_NAME = "component.name";
+    private final static String APP_BND_AUTHZ_TABLE_SERVICE = "com.ibm.ws.security.appbnd.AppBndAuthorizationTableService";
 
     private final Mockery context = new JUnit4Mockery();
     private final ComponentContext cc = context.mock(ComponentContext.class);
@@ -75,6 +78,7 @@ public class BuiltinAuthorizationServiceTest {
     private final AccessDecisionService accessDecisionService = context.mock(AccessDecisionService.class);
     private final ServiceReference<AuthorizationTableService> authzTableServiceRef = context.mock(ServiceReference.class, "authzTableServiceRef");
     private final AuthorizationTableService authzTableService = context.mock(AuthorizationTableService.class, "authzTableService");
+    private final AuthorizationTableService appBndAuthorizationTableService = context.mock(AuthorizationTableService.class, "appBndAuthorizationTableService");
     private final ServiceReference<AuthorizationTableService> authzTableService2Ref = context.mock(ServiceReference.class, "authzTableService2Ref");
     private final AuthorizationTableService authzTableService2 = context.mock(AuthorizationTableService.class, "authzTableService2");
     private final ServiceReference<AuthorizationTableService> authzTableService3Ref = context.mock(ServiceReference.class, "authzTableService3Ref");
@@ -100,6 +104,8 @@ public class BuiltinAuthorizationServiceTest {
                 will(returnValue(1L));
                 allowing(authzTableServiceRef).getProperty(Constants.SERVICE_RANKING);
                 will(returnValue(0));
+                allowing(authzTableServiceRef).getProperty(COMPONENT_NAME);
+                will(returnValue(APP_BND_AUTHZ_TABLE_SERVICE));
                 allowing(cc).locateService(BuiltinAuthorizationService.KEY_AUTHORIZATION_TABLE_SERVICE, authzTableServiceRef);
                 will(returnValue(authzTableService));
 
@@ -107,6 +113,8 @@ public class BuiltinAuthorizationServiceTest {
                 will(returnValue(2L));
                 allowing(authzTableService2Ref).getProperty(Constants.SERVICE_RANKING);
                 will(returnValue(0));
+                allowing(authzTableService2Ref).getProperty(COMPONENT_NAME);
+                will(returnValue(APP_BND_AUTHZ_TABLE_SERVICE));
                 allowing(cc).locateService(BuiltinAuthorizationService.KEY_AUTHORIZATION_TABLE_SERVICE, authzTableService2Ref);
                 will(returnValue(authzTableService2));
 
@@ -116,9 +124,10 @@ public class BuiltinAuthorizationServiceTest {
                 will(returnValue(0));
                 allowing(cc).locateService(BuiltinAuthorizationService.KEY_AUTHORIZATION_TABLE_SERVICE, authzTableService3Ref);
                 will(returnValue(authzTableService3));
+                allowing(authzTableService3Ref).getProperty(COMPONENT_NAME);
+                will(returnValue(APP_BND_AUTHZ_TABLE_SERVICE));
                 allowing(authzTableService).isAuthzInfoAvailableForApp("myApp");
                 will(returnValue(true));
-
             }
         });
 
@@ -142,12 +151,12 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      * @throws CredentialDestroyedException
      * @throws CredentialExpiredException
      */
     @Test
-    public void testIsAuthorized_trueForUser() throws Exception {
+    public void testIsAuthorized_trueForUserWithRealm() throws Exception {
         WSPrincipal princ = new WSPrincipal(subject1, accessId1, authMethod);
         Set<Principal> principals = new HashSet<Principal>();
         principals.add(princ);
@@ -178,8 +187,10 @@ public class BuiltinAuthorizationServiceTest {
 
                 one(wsCred).getAccessId();
                 will(returnValue(accessId1));
+                one(wsCred).getRealmName();
+                will(returnValue(realmName1));
 
-                one(authzTableService).getRolesForAccessId(resourceName, accessId1);
+                one(authzTableService).getRolesForAccessId(resourceName, accessId1, realmName1);
                 will(returnValue(assignedRoles));
                 one(accessDecisionService).isGranted(resourceName, requiredRoles, assignedRoles, subject);
                 will(returnValue(Boolean.TRUE));
@@ -193,19 +204,17 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      * @throws CredentialDestroyedException
      * @throws CredentialExpiredException
      */
     @Test
-    public void testIsAuthorized_trueForGroup() throws Exception {
+    public void testIsAuthorized_trueForUserNoRealm() throws Exception {
         WSPrincipal princ = new WSPrincipal(subject1, accessId1, authMethod);
         Set<Principal> principals = new HashSet<Principal>();
         principals.add(princ);
         HashSet<Object> pubCredentials = new HashSet<Object>();
         pubCredentials.add(wsCred);
-        final List<String> groupIds = new ArrayList<String>();
-        groupIds.add("group:realm/group1");
         HashSet<Object> privCredentials = new HashSet<Object>();
         final Subject subject = new Subject(false, principals, pubCredentials, privCredentials);
 
@@ -231,8 +240,65 @@ public class BuiltinAuthorizationServiceTest {
 
                 one(wsCred).getAccessId();
                 will(returnValue(accessId1));
+                one(wsCred).getRealmName();
+                will(returnValue(null));
 
-                one(authzTableService).getRolesForAccessId(resourceName, accessId1);
+                one(authzTableService).getRolesForAccessId(resourceName, accessId1, null);
+                will(returnValue(assignedRoles));
+                one(accessDecisionService).isGranted(resourceName, requiredRoles, assignedRoles, subject);
+                will(returnValue(Boolean.TRUE));
+            }
+        });
+
+        assertTrue("isAuthorized should return true",
+                   builtinAuthz.isAuthorized(resourceName, requiredRoles, subject));
+    }
+
+    /**
+     * Test method for
+     * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
+     *
+     * @throws CredentialDestroyedException
+     * @throws CredentialExpiredException
+     */
+    @Test
+    public void testIsAuthorized_trueForGroupWithRealm() throws Exception {
+        WSPrincipal princ = new WSPrincipal(subject1, accessId1, authMethod);
+        Set<Principal> principals = new HashSet<Principal>();
+        principals.add(princ);
+        HashSet<Object> pubCredentials = new HashSet<Object>();
+        pubCredentials.add(wsCred);
+        final List<String> groupIds = new ArrayList<String>();
+        groupIds.add("group:BasicRealm/group1");
+        HashSet<Object> privCredentials = new HashSet<Object>();
+        final Subject subject = new Subject(false, principals, pubCredentials, privCredentials);
+
+        requiredRoles.add(role1);
+        assignedRoles = new RoleSet(requiredRoles);
+
+        context.checking(new Expectations() {
+            {
+                one(authzTableService).getRolesForSpecialSubject(resourceName, AuthorizationTableService.EVERYONE);
+                will(returnValue(RoleSet.EMPTY_ROLESET));
+                one(accessDecisionService).isGranted(resourceName, requiredRoles, RoleSet.EMPTY_ROLESET, null);
+                will(returnValue(Boolean.FALSE));
+
+                one(wsCred).isUnauthenticated();
+                will(returnValue(Boolean.FALSE));
+                one(wsCred).isBasicAuth();
+                will(returnValue(Boolean.FALSE));
+
+                one(authzTableService).getRolesForSpecialSubject(resourceName, AuthorizationTableService.ALL_AUTHENTICATED_USERS);
+                will(returnValue(RoleSet.EMPTY_ROLESET));
+                one(accessDecisionService).isGranted(resourceName, requiredRoles, RoleSet.EMPTY_ROLESET, subject);
+                will(returnValue(Boolean.FALSE));
+
+                one(wsCred).getAccessId();
+                will(returnValue(accessId1));
+                one(wsCred).getRealmName();
+                will(returnValue(realmName1));
+
+                one(authzTableService).getRolesForAccessId(resourceName, accessId1, realmName1);
                 will(returnValue(RoleSet.EMPTY_ROLESET));
                 one(accessDecisionService).isGranted(resourceName, requiredRoles, RoleSet.EMPTY_ROLESET, subject);
                 will(returnValue(Boolean.FALSE));
@@ -240,7 +306,70 @@ public class BuiltinAuthorizationServiceTest {
                 one(wsCred).getGroupIds();
                 will(returnValue(groupIds));
 
-                one(authzTableService).getRolesForAccessId(resourceName, groupAccessId1);
+                one(authzTableService).getRolesForAccessId(resourceName, groupAccessId1, realmName1);
+                will(returnValue(assignedRoles));
+                one(accessDecisionService).isGranted(resourceName, requiredRoles, assignedRoles, subject);
+                will(returnValue(Boolean.TRUE));
+            }
+        });
+
+        assertTrue("isAuthorized should return true because group has access",
+                   builtinAuthz.isAuthorized(resourceName, requiredRoles, subject));
+    }
+
+    /**
+     * Test method for
+     * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
+     *
+     * @throws CredentialDestroyedException
+     * @throws CredentialExpiredException
+     */
+    @Test
+    public void testIsAuthorized_trueForGroupNoRealm() throws Exception {
+        WSPrincipal princ = new WSPrincipal(subject1, accessId1, authMethod);
+        Set<Principal> principals = new HashSet<Principal>();
+        principals.add(princ);
+        HashSet<Object> pubCredentials = new HashSet<Object>();
+        pubCredentials.add(wsCred);
+        final List<String> groupIds = new ArrayList<String>();
+        groupIds.add("group:BasicRealm/group1");
+        HashSet<Object> privCredentials = new HashSet<Object>();
+        final Subject subject = new Subject(false, principals, pubCredentials, privCredentials);
+
+        requiredRoles.add(role1);
+        assignedRoles = new RoleSet(requiredRoles);
+
+        context.checking(new Expectations() {
+            {
+                one(authzTableService).getRolesForSpecialSubject(resourceName, AuthorizationTableService.EVERYONE);
+                will(returnValue(RoleSet.EMPTY_ROLESET));
+                one(accessDecisionService).isGranted(resourceName, requiredRoles, RoleSet.EMPTY_ROLESET, null);
+                will(returnValue(Boolean.FALSE));
+
+                one(wsCred).isUnauthenticated();
+                will(returnValue(Boolean.FALSE));
+                one(wsCred).isBasicAuth();
+                will(returnValue(Boolean.FALSE));
+
+                one(authzTableService).getRolesForSpecialSubject(resourceName, AuthorizationTableService.ALL_AUTHENTICATED_USERS);
+                will(returnValue(RoleSet.EMPTY_ROLESET));
+                one(accessDecisionService).isGranted(resourceName, requiredRoles, RoleSet.EMPTY_ROLESET, subject);
+                will(returnValue(Boolean.FALSE));
+
+                one(wsCred).getAccessId();
+                will(returnValue(accessId1));
+                one(wsCred).getRealmName();
+                will(returnValue(null));
+
+                one(authzTableService).getRolesForAccessId(resourceName, accessId1, null);
+                will(returnValue(RoleSet.EMPTY_ROLESET));
+                one(accessDecisionService).isGranted(resourceName, requiredRoles, RoleSet.EMPTY_ROLESET, subject);
+                will(returnValue(Boolean.FALSE));
+
+                one(wsCred).getGroupIds();
+                will(returnValue(groupIds));
+
+                one(authzTableService).getRolesForAccessId(resourceName, groupAccessId1, null);
                 will(returnValue(assignedRoles));
                 one(accessDecisionService).isGranted(resourceName, requiredRoles, assignedRoles, subject);
                 will(returnValue(Boolean.TRUE));
@@ -368,7 +497,7 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      * @throws CredentialDestroyedException
      * @throws CredentialExpiredException
      */
@@ -380,10 +509,9 @@ public class BuiltinAuthorizationServiceTest {
         HashSet<Object> pubCredentials = new HashSet<Object>();
         pubCredentials.add(wsCred);
         final List<String> groupIds = new ArrayList<String>();
-        groupIds.add("group:realm/group1");
+        groupIds.add("group:BasicRealm/group1");
         HashSet<Object> privCredentials = new HashSet<Object>();
-        final Subject subject = new Subject(false, principals, pubCredentials,
-                        privCredentials);
+        final Subject subject = new Subject(false, principals, pubCredentials, privCredentials);
 
         requiredRoles.add(role1);
         assignedRoles = new RoleSet(requiredRoles);
@@ -408,8 +536,10 @@ public class BuiltinAuthorizationServiceTest {
 
                 one(wsCred).getAccessId();
                 will(returnValue(accessId1));
+                one(wsCred).getRealmName();
+                will(returnValue(realmName1));
 
-                one(authzTableService).getRolesForAccessId(resourceName, accessId1);
+                one(authzTableService).getRolesForAccessId(resourceName, accessId1, realmName1);
                 will(returnValue(RoleSet.EMPTY_ROLESET));
                 one(accessDecisionService).isGranted(resourceName, requiredRoles, RoleSet.EMPTY_ROLESET, subject);
                 will(returnValue(Boolean.FALSE));
@@ -417,7 +547,7 @@ public class BuiltinAuthorizationServiceTest {
                 one(wsCred).getGroupIds();
                 will(returnValue(groupIds));
 
-                one(authzTableService).getRolesForAccessId(resourceName, groupAccessId1);
+                one(authzTableService).getRolesForAccessId(resourceName, groupAccessId1, realmName1);
                 will(returnValue(assignedRoles));
                 one(accessDecisionService).isGranted(resourceName, requiredRoles, assignedRoles, subject);
                 will(returnValue(Boolean.FALSE));
@@ -431,7 +561,7 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      * @throws CredentialDestroyedException
      * @throws CredentialExpiredException
      */
@@ -443,8 +573,7 @@ public class BuiltinAuthorizationServiceTest {
         HashSet<Object> pubCredentials = new HashSet<Object>();
         pubCredentials.add(wsCred);
         HashSet<Object> privCredentials = new HashSet<Object>();
-        final Subject subject = new Subject(false, principals, pubCredentials,
-                        privCredentials);
+        final Subject subject = new Subject(false, principals, pubCredentials, privCredentials);
 
         requiredRoles.add(role1);
 
@@ -470,8 +599,10 @@ public class BuiltinAuthorizationServiceTest {
                 will(throwException(new CredentialExpiredException("expected")));
                 one(wsCred).getGroupIds();
                 will(throwException(new CredentialExpiredException("expected")));
+                one(wsCred).getRealmName();
+                will(throwException(new CredentialExpiredException("expected")));
 
-                one(authzTableService).getRolesForAccessId(resourceName, null);
+                one(authzTableService).getRolesForAccessId(resourceName, null, null);
                 will(returnValue(RoleSet.EMPTY_ROLESET));
                 one(accessDecisionService).isGranted(resourceName, requiredRoles, RoleSet.EMPTY_ROLESET, subject);
                 will(returnValue(Boolean.FALSE));
@@ -486,7 +617,7 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      * @throws CredentialDestroyedException
      * @throws CredentialExpiredException
      */
@@ -498,8 +629,7 @@ public class BuiltinAuthorizationServiceTest {
         HashSet<Object> pubCredentials = new HashSet<Object>();
         pubCredentials.add(wsCred);
         HashSet<Object> privCredentials = new HashSet<Object>();
-        final Subject subject = new Subject(false, principals, pubCredentials,
-                        privCredentials);
+        final Subject subject = new Subject(false, principals, pubCredentials, privCredentials);
 
         requiredRoles.add(role1);
 
@@ -525,8 +655,10 @@ public class BuiltinAuthorizationServiceTest {
                 will(throwException(new CredentialDestroyedException("expected")));
                 one(wsCred).getGroupIds();
                 will(throwException(new CredentialDestroyedException("expected")));
+                one(wsCred).getRealmName();
+                will(throwException(new CredentialExpiredException("expected")));
 
-                one(authzTableService).getRolesForAccessId(resourceName, null);
+                one(authzTableService).getRolesForAccessId(resourceName, null, null);
                 will(returnValue(RoleSet.EMPTY_ROLESET));
                 one(accessDecisionService).isGranted(resourceName, requiredRoles, RoleSet.EMPTY_ROLESET, subject);
                 will(returnValue(Boolean.FALSE));
@@ -541,7 +673,7 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      * @throws CredentialDestroyedException
      * @throws CredentialExpiredException
      */
@@ -567,7 +699,7 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      * @throws CredentialDestroyedException
      * @throws CredentialExpiredException
      */
@@ -593,7 +725,7 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      */
     @Test
     public void testIsAuthorized_falseNoWSCred() throws Exception {
@@ -602,8 +734,7 @@ public class BuiltinAuthorizationServiceTest {
         principals.add(princ);
         HashSet<Object> pubCredentials = new HashSet<Object>();
         HashSet<Object> privCredentials = new HashSet<Object>();
-        final Subject subject = new Subject(false, principals, pubCredentials,
-                        privCredentials);
+        final Subject subject = new Subject(false, principals, pubCredentials, privCredentials);
 
         requiredRoles.add(role1);
 
@@ -623,7 +754,7 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      * @throws CredentialDestroyedException
      * @throws CredentialExpiredException
      */
@@ -635,8 +766,7 @@ public class BuiltinAuthorizationServiceTest {
         HashSet<Object> pubCredentials = new HashSet<Object>();
         pubCredentials.add(wsCred);
         HashSet<Object> privCredentials = new HashSet<Object>();
-        final Subject subject = new Subject(false, principals, pubCredentials,
-                        privCredentials);
+        final Subject subject = new Subject(false, principals, pubCredentials, privCredentials);
 
         requiredRoles.add(role1);
 
@@ -659,7 +789,7 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      * @throws CredentialDestroyedException
      * @throws CredentialExpiredException
      */
@@ -703,8 +833,7 @@ public class BuiltinAuthorizationServiceTest {
             fail("isAuthorized with null resource should throw a NullPointerException");
         } catch (NullPointerException e) {
             // expected if null resource name is specified
-            assertTrue("Exception should contain message stating null: " + e, e
-                            .getMessage().contains("resource"));
+            assertTrue("Exception should contain message stating null: " + e, e.getMessage().contains("resource"));
         }
     }
 
@@ -721,7 +850,7 @@ public class BuiltinAuthorizationServiceTest {
             // expected if null required roles is specified
             assertTrue(
                        "Exception should contain message stating null: "
-                                       + e.getMessage(),
+                       + e.getMessage(),
                        e.getMessage().contains("requiredRoles"));
         }
     }
@@ -826,8 +955,7 @@ public class BuiltinAuthorizationServiceTest {
             fail("isEveryoneGranted with null resource should throw a NullPointerException");
         } catch (NullPointerException e) {
             // expected if null resource name is specified
-            assertTrue("Exception should contain message stating null: " + e, e
-                            .getMessage().contains("resource"));
+            assertTrue("Exception should contain message stating null: " + e, e.getMessage().contains("resource"));
         }
     }
 
@@ -843,7 +971,7 @@ public class BuiltinAuthorizationServiceTest {
             // expected if null required roles is specified
             assertTrue(
                        "Exception should contain message stating null: "
-                                       + e.getMessage(),
+                       + e.getMessage(),
                        e.getMessage().contains("requiredRoles"));
         }
     }
@@ -884,8 +1012,7 @@ public class BuiltinAuthorizationServiceTest {
         principals.add(princ);
         HashSet<Object> pubCredentials = new HashSet<Object>();
         HashSet<Object> privCredentials = new HashSet<Object>();
-        final Subject subject = new Subject(false, principals, pubCredentials,
-                        privCredentials);
+        final Subject subject = new Subject(false, principals, pubCredentials, privCredentials);
 
         requiredRoles.add(role1);
 
@@ -989,7 +1116,7 @@ public class BuiltinAuthorizationServiceTest {
     /**
      * Test method for
      * {@link com.ibm.ws.security.authorization.builtin.internal.BuiltinAuthorizationService#isAuthorized(java.lang.Object, java.util.List, javax.security.auth.Subject)} .
-     * 
+     *
      * @throws CredentialDestroyedException
      * @throws CredentialExpiredException
      */
@@ -1011,6 +1138,8 @@ public class BuiltinAuthorizationServiceTest {
 
         context.checking(new Expectations() {
             {
+                allowing(authzTableService3).isAuthzInfoAvailableForApp("myApp");
+                will(returnValue(true));
                 one(authzTableService).getRolesForSpecialSubject(resourceName, AuthorizationTableService.EVERYONE);
                 will(returnValue(RoleSet.EMPTY_ROLESET));
                 one(authzTableService2).getRolesForSpecialSubject(resourceName, AuthorizationTableService.EVERYONE);
@@ -1036,12 +1165,14 @@ public class BuiltinAuthorizationServiceTest {
 
                 one(wsCred).getAccessId();
                 will(returnValue(accessId1));
+                one(wsCred).getRealmName();
+                will(returnValue(realmName1));
 
-                one(authzTableService).getRolesForAccessId(resourceName, accessId1);
+                one(authzTableService).getRolesForAccessId(resourceName, accessId1, realmName1);
                 will(returnValue(assignedRoles));
-                one(authzTableService2).getRolesForAccessId(resourceName, accessId1);
+                one(authzTableService2).getRolesForAccessId(resourceName, accessId1, realmName1);
                 will(returnValue(assignedRoles));
-                one(authzTableService3).getRolesForAccessId(resourceName, accessId1);
+                one(authzTableService3).getRolesForAccessId(resourceName, accessId1, realmName1);
                 will(returnValue(null));
                 one(accessDecisionService).isGranted(resourceName, requiredRoles, null, subject);
                 will(returnValue(Boolean.TRUE));

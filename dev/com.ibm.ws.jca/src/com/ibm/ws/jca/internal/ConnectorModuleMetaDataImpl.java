@@ -10,9 +10,12 @@
  *******************************************************************************/
 package com.ibm.ws.jca.internal;
 
+import java.util.Arrays;
 import java.util.Dictionary;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.Constants;
@@ -30,7 +33,6 @@ import com.ibm.ws.container.service.app.deploy.extended.ExtendedApplicationInfo;
 import com.ibm.ws.jca.metadata.ConnectorModuleMetaData;
 import com.ibm.ws.jca.utils.metagen.MetaGenConstants;
 import com.ibm.ws.jca.utils.xml.ra.RaConnector;
-import com.ibm.ws.kernel.service.util.PrivHelper;
 import com.ibm.ws.runtime.metadata.ApplicationMetaData;
 import com.ibm.ws.runtime.metadata.ComponentMetaData;
 import com.ibm.ws.runtime.metadata.MetaDataImpl;
@@ -45,6 +47,13 @@ public class ConnectorModuleMetaDataImpl extends MetaDataImpl implements Connect
     private static final String RA_CONSTANT = "ResourceAdapter";
 
     static final String RA_MODULE_CONSTANT = "ResourceAdapterModule";
+
+    /**
+     * Reserved Ids for WebSphere JMS and MQ resource adapter
+     */
+    private static final String WASJMS = "wasJms";
+    private static final String WMQJMS = "wmqJms";
+    private static final Set<String> reservedIds = new HashSet<String>(Arrays.asList(WASJMS, WMQJMS));
 
     private final ApplicationMetaData applicationMetaData;
     private Boolean autoStart = null;
@@ -71,6 +80,7 @@ public class ConnectorModuleMetaDataImpl extends MetaDataImpl implements Connect
         applicationMetaData = appInfo.getMetaData();
         config = appInfo.getConfigHelper();
         moduleName = cmInfo.getName(); // get the unique module name. This is handled by app manager
+
         embeddedRAConfig = isEmbedded ? getConfigForEmbeddedResourceAdapter() : null;
         String id = (String) get("id");
         if (id != null && id.startsWith("default-")) // ignore generated id
@@ -90,8 +100,13 @@ public class ConnectorModuleMetaDataImpl extends MetaDataImpl implements Connect
             // Standalone RA same as app, so use a constant for module
             ivJ2EEName = j2eeNameFactory.create(applicationMetaData.getJ2EEName().getApplication(), RA_MODULE_CONSTANT, null);
         }
+        // id consists only of supported characters?
         if (!id.matches("[0-9a-zA-Z.\\-_]*"))
             throw new UnableToAdaptException(Utils.getMessage("J2CA8814.resource.adapter.install.failed", id));
+        // verify that id isn't one of the reserved ids for wmq or was jms adapter
+        if (reservedIds.contains(id))
+            throw new UnableToAdaptException(Utils.getMessage("J2CA8816.reserved.resource.adapter.id", moduleName, reservedIds));
+
         processConfigElementCustomizations();
         metagenConfig.put(MetaGenConstants.KEY_ADAPTER_NAME, id);
         metagenConfig.put(MetaGenConstants.KEY_GENERATION_MODE, MetaGenConstants.VALUE_GENERATION_MODE_RAR);
@@ -206,12 +221,12 @@ public class ConnectorModuleMetaDataImpl extends MetaDataImpl implements Connect
      */
     private String getIDFromSupertype(String raPid, int startIndex) throws Exception {
 
-        BundleContext bundleContext = PrivHelper.getBundleContext(FrameworkUtil.getBundle(getClass()));
-        ServiceReference<ConfigurationAdmin> configAdminRef = PrivHelper.getServiceReference(bundleContext, ConfigurationAdmin.class);
+        BundleContext bundleContext = Utils.priv.getBundleContext(FrameworkUtil.getBundle(getClass()));
+        ServiceReference<ConfigurationAdmin> configAdminRef = Utils.priv.getServiceReference(bundleContext, ConfigurationAdmin.class);
         try {
             String filter = "(" + Constants.SERVICE_PID + "=" + raPid + ")";
 
-            ConfigurationAdmin configAdmin = PrivHelper.getService(bundleContext, configAdminRef);
+            ConfigurationAdmin configAdmin = Utils.priv.getService(bundleContext, configAdminRef);
             Configuration[] configurations = configAdmin.listConfigurations(filter);
             if (configurations != null) {
                 String id = (String) configurations[0].getProperties().get("id");
@@ -274,9 +289,9 @@ public class ConnectorModuleMetaDataImpl extends MetaDataImpl implements Connect
      * @return configured properties for an embedded resource adapter, if any.
      */
     private final Dictionary<String, Object> getConfigForEmbeddedResourceAdapter() throws UnableToAdaptException {
-        BundleContext bundleContext = PrivHelper.getBundleContext(FrameworkUtil.getBundle(getClass()));
-        ServiceReference<ConfigurationAdmin> configAdminRef = PrivHelper.getServiceReference(bundleContext, ConfigurationAdmin.class);
-        ConfigurationAdmin configAdmin = PrivHelper.getService(bundleContext, configAdminRef);
+        BundleContext bundleContext = Utils.priv.getBundleContext(FrameworkUtil.getBundle(getClass()));
+        ServiceReference<ConfigurationAdmin> configAdminRef = Utils.priv.getServiceReference(bundleContext, ConfigurationAdmin.class);
+        ConfigurationAdmin configAdmin = Utils.priv.getService(bundleContext, configAdminRef);
         try {
             // go through all child resourceAdapter configurations until we find the right one, if any
             String parentPid = (String) config.get(SOURCE_PID); // TODO remove once the supertype of application is gone

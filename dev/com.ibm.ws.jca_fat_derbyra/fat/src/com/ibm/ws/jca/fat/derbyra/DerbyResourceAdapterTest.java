@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -48,6 +48,7 @@ public class DerbyResourceAdapterTest extends FATServletClient {
 
         WebArchive war = ShrinkWrap.create(WebArchive.class, WAR_NAME + ".war");
         war.addPackage("web");
+        war.addPackage("web.mdb");
         war.addAsWebInfResource(new File("test-applications/fvtweb/resources/WEB-INF/ibm-web-bnd.xml"));
         war.addAsWebInfResource(new File("test-applications/fvtweb/resources/WEB-INF/web.xml"));
 
@@ -60,7 +61,8 @@ public class DerbyResourceAdapterTest extends FATServletClient {
         rar.as(JavaArchive.class).addPackage("fat.derbyra.resourceadapter");
         rar.addAsManifestResource(new File("test-resourceadapters/fvt-resourceadapter/resources/META-INF/ra.xml"));
         rar.addAsManifestResource(new File("test-resourceadapters/fvt-resourceadapter/resources/META-INF/wlp-ra.xml"));
-        rar.addAsLibrary(new File("publish/servers/com.ibm.ws.jca.fat.derbyra/derby/derby-10.11.1.1.jar"));
+        rar.addAsManifestResource(new File("test-resourceadapters/fvt-resourceadapter/resources/META-INF/permissions.xml"));
+        rar.addAsLibrary(new File("publish/shared/resources/derby/derby.jar"));
 
         ShrinkHelper.exportToServer(server, "connectors", rar);
 
@@ -72,11 +74,30 @@ public class DerbyResourceAdapterTest extends FATServletClient {
     public static void tearDown() throws Exception {
         server.stopServer("SRVE9967W", // The manifest class path derbyLocale_cs.jar can not be found in jar file wsjar:file:/C:/Users/IBM_ADMIN/Documents/workspace/build.image/wlp/usr/servers/com.ibm.ws.jca.fat.derbyra/connectors/DerbyRA.rar!/derby.jar or its parent.
                           // This may just be because we don't care about including manifest files in our test buckets, if that's the case, we can ignore this.
-                          "J2CA0081E"); //Expected due to simulated exception in testConnPoolStatsExceptionDestroy
+                          "J2CA0027E: .*eis/ds3", // Intentionally caused failure on XA.commit in order to cause in-doubt transaction
+                          "J2CA0081E", //Expected due to simulated exception in testConnPoolStatsExceptionDestroy
+                          "WTRN0048W: .*XAER_RMFAIL"); // Intentionally caused failure on XA.commit in order to cause in-doubt transaction
     }
 
     private void runTest(String servlet) throws Exception {
         FATServletClient.runTest(server, servlet, testName.getMethodName());
+    }
+
+    @Test
+    public void testActivationSpec() throws Exception {
+        runTest(DerbyRAAnnoServlet);
+    }
+
+    @ExpectedFFDC({ "javax.ejb.EJBException",
+                    "javax.transaction.HeuristicMixedException",
+                    "javax.transaction.xa.XAException",
+                    "com.ibm.websphere.csi.CSITransactionRolledbackException" })
+    @Test
+    public void testActivationSpecXARecovery() throws Exception {
+        server.setMarkToEndOfLog();
+        runTest(DerbyRAAnnoServlet);
+        // Wait for FFDC messages which can be reported asynchronously to the servlet thread
+        server.waitForStringInLogUsingMark("FFDC1015I.*EJBException");
     }
 
     @Test
@@ -144,6 +165,12 @@ public class DerbyResourceAdapterTest extends FATServletClient {
         runTest(DerbyRAAnnoServlet);
     }
 
+    @ExpectedFFDC("javax.transaction.xa.XAException") // intentionally caused failure to make the transaction in-doubt
+    @Test
+    public void testXARecovery() throws Exception {
+        runTest(DerbyRAAnnoServlet);
+    }
+
     @Test
     public void testXATerminator() throws Exception {
         runTest(DerbyRAAnnoServlet);
@@ -152,6 +179,11 @@ public class DerbyResourceAdapterTest extends FATServletClient {
     @ExpectedFFDC({ "javax.resource.ResourceException" }) //simulated exception in destroy
     @Test
     public void testConnPoolStatsExceptionInDestroy() throws Exception {
+        runTest(DerbyRAServlet);
+    }
+
+    @Test
+    public void testErrorInFreeConn() throws Exception {
         runTest(DerbyRAServlet);
     }
 }

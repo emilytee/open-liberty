@@ -12,6 +12,7 @@ package com.ibm.wsspi.webcontainer.util;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
+import java.nio.charset.Charset;
 import java.text.MessageFormat;
 import java.util.HashSet;
 import java.util.Hashtable;
@@ -50,7 +51,7 @@ public class RequestUtils {
     private static int maxParamPerRequest = WCCustomProperties.MAX_PARAM_PER_REQUEST; // PM53930 (724365)
     private static final int maxDuplicateHashKeyParams = WCCustomProperties.MAX_DUPLICATE_HASHKEY_PARAMS; // PM58495 (728397)
     private static boolean decodeParamViaReqEncoding = WCCustomProperties.DECODE_PARAM_VIA_REQ_ENCODING; // PM92940
-    private static boolean printbyteValueandcharParamdata = WCCustomProperties.PRINT_BYTEVALUE_AND_CHARPARAMDATA; //PM92940
+    private static final boolean printbyteValueandcharParamdata = WCCustomProperties.PRINT_BYTEVALUE_AND_CHARPARAMDATA; //PM92940
 
 
     
@@ -85,51 +86,188 @@ public class RequestUtils {
     *						is invalid
     *
     */
-    @SuppressWarnings("unchecked")
-   static public Hashtable parseQueryString(String s)
-   {
-        return parseQueryString(s, SHORT_ENGLISH);
-   }
-    
-   @SuppressWarnings("unchecked")
-   static public Hashtable parseQueryString(String s,String encoding)
-   {
-        char[][] cha = new char[1][];
-        cha[0]=s.toCharArray();
-        return parseQueryString(cha, encoding);
-   }
-      
+    static public Hashtable parseQueryString(String s) {
+        return parseQueryString(s.toCharArray(), SHORT_ENGLISH);
+    }
+
+    static public Hashtable parseQueryString(String s, String encoding) {
+        return parseQueryString(s.toCharArray(), encoding);
+    }
+
+    private static String lastShortEnglishEncoding = null;
+
+    private static boolean isShortEnglishEncoding(String encoding) {
+        if (encoding == lastShortEnglishEncoding
+            || encoding == SHORT_ENGLISH
+            || encoding == "ISO-8859-1")
+            return true;
+
+        if (encoding.endsWith("8859_1")
+            || encoding.endsWith("8859-1")
+            || encoding.indexOf("8859-1-Windows") != -1) {
+            lastShortEnglishEncoding = encoding;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * This method is an optimized version of the parseQueryString(char[][], String)
+     * method for use when there is only one char[].
+     * 
+     * @param ch
+     * @param encoding
+     * @return
+     */
+    static private Hashtable parseQueryString(char[] ch, String encoding) {
+        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) { //PK75617
+            logger.entering(CLASS_NAME, "parseQueryString( char[] , encoding --> [" + encoding + "])"); //PM35450.1
+        } //PK75617
+        int totalSize = 0; //PM53930
+        int dupSize = 0; // 728397
+        Hashtable<String, String[]> ht = new Hashtable<>();
+        HashSet<Integer> key_hset = new HashSet<>(); // 728397
+        // PK23256 begin
+        boolean encoding_is_ShortEnglish = isShortEnglishEncoding(encoding);
+        // PK23256 end
+        int pair_start = 0, equalSign = -1;
+        int lgth = ch.length;
+
+        for (int i = 0; i <= lgth; i++) {
+            if (i == lgth || ch[i] == '&') {
+                if (equalSign < pair_start) {
+                    equalSign = i;
+                }
+            } else {
+                if (ch[i] == '=') {
+                    // Only record the first = after pair_start so we handle if a value has an = in it.
+                    if (equalSign < pair_start) {
+                        equalSign = i;
+                    }
+                }
+                continue;
+            }
+
+            //logger.logp(Level.FINE, CLASS_NAME,"parseQueryString", "equalSign =" + equalSign);
+
+            if ((equalSign < i) || (allowQueryParamWithNoEqual && equalSign == i)) //PM35450 , parameter is blah and not blah=
+            { // equal sign found at offset equalSign
+                String key = null; //PM92940 Start
+                String value = null;
+
+                if (decodeParamViaReqEncoding && (!encoding_is_ShortEnglish)) {
+
+                    // data, start, (end-start),encoding, string
+                    key = parse_decode_Parameter(ch, pair_start, equalSign - pair_start, encoding, "paramKey");
+
+                    if (equalSign == i) {
+                        value = key != null ? EMPTY_STRING : null;
+                    } else {
+                        int valueStart = equalSign + 1, valueLen = i - valueStart;
+                        value = parse_decode_Parameter(ch, valueStart, valueLen, encoding, "paramValue");
+                    }
+
+                    if (ignoreInvalidQueryString && ((value == null) || (key == null))) {
+                        pair_start = i + 1;
+                        equalSign = i;
+                        continue;
+                    }
+
+                } else {
+                    key = parseName(ch, pair_start, equalSign);
+                    //PM35450 Start
+                    //String value = null;
+                    if (equalSign == i) {
+                        value = key != null ? EMPTY_STRING : null;
+                    } else {
+                        value = parseName(ch, equalSign + 1, i);
+                    }
+                    //PM35450 End
+
+                    if (ignoreInvalidQueryString && ((value == null) || (key == null))) { //PK75617
+                        pair_start = i + 1;
+                        equalSign = i;
+                        continue;
+                    } //PK75617
+                    if (!encoding_is_ShortEnglish) {
+                        try {
+                            key = new String(key.getBytes(SHORT_ENGLISH), encoding);
+                            value = new String(value.getBytes(SHORT_ENGLISH), encoding);
+                        } catch (UnsupportedEncodingException uee) {
+                            //No need to nls. SHORT_ENGLISH will always be supported
+                            logger.logp(Level.SEVERE, CLASS_NAME, "parseQueryString", "unsupported exception", uee);
+                            throw new IllegalArgumentException();
+                        }
+                    }
+                } //PM92940 End
+
+                //logger.logp(Level.FINE, CLASS_NAME,"parseQueryString", "key="+key+", value="+value);
+                String valArray[] = new String[] { value };
+                String[] oldVals = (String[]) ht.put(key, valArray);
+                if (oldVals != null) {
+                    valArray = new String[oldVals.length + 1];
+                    System.arraycopy(oldVals, 0, valArray, 0, oldVals.length);
+                    valArray[oldVals.length] = value;
+                    ht.put(key, valArray);
+                } else {
+                    // 728397 Start 
+                    if (!(key_hset.add(key.hashCode()))) {
+                        dupSize++;// if false then count as duplicate hashcodes for unique keys
+                        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+                            logger.logp(Level.FINE, CLASS_NAME, "parseQueryString", "duplicate hashCode generated by key --> " + key);
+                        }
+                        if (dupSize > maxDuplicateHashKeyParams) {
+                            logger.logp(Level.SEVERE, CLASS_NAME, "parseQueryString",
+                                        MessageFormat.format(nls.getString("Exceeding.maximum.hash.collisions"), new Object[] { maxDuplicateHashKeyParams }));
+
+                            throw new IllegalArgumentException();
+                        }
+                    } // 728397 End 
+                }
+            }
+            // 724365(PM53930) Start
+            totalSize++;
+            if (maxParamPerRequest != -1 && totalSize >= maxParamPerRequest) {
+                // possibly 10000 big enough, will never be here 
+                logger.logp(Level.SEVERE, CLASS_NAME, "parseQueryString",
+                            MessageFormat.format(nls.getString("Exceeding.maximum.parameters"), new Object[] { maxParamPerRequest, totalSize }));
+                throw new IllegalArgumentException();
+            } // 724365 End
+            pair_start = i + 1;
+            equalSign = i;
+        }
+
+        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) { //PK75617
+            logger.exiting(CLASS_NAME, "parseQueryString(char[], String)");
+        } //PK75617
+        return ht;
+    }
+
    @SuppressWarnings("unchecked") 
    static public Hashtable parseQueryString(char[][] cha, String encoding)
    {
        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled()&&logger.isLoggable (Level.FINE)){	//PK75617
            logger.entering(CLASS_NAME, "parseQueryString( query , encoding --> [" +  encoding +"])"); //PM35450.1
        }																							//PK75617
-       String valArray[] = null;
-       int totalSize = 0; //PM53930
-       int dupSize = 0; // 728397
        if (cha == null || cha.length==0)
        {
            throw new IllegalArgumentException("query string or post data is null");
        }
+
+       // Call optimized version if there is only 1 char[]
+       if (cha.length == 1) {
+           return parseQueryString(cha[0], encoding);
+       }
+
+       String valArray[] = null;
+       int totalSize = 0; //PM53930
+       int dupSize = 0; // 728397
        Hashtable ht = new Hashtable();
        HashSet<Integer> key_hset = new HashSet<Integer>(); // 728397
        // @MD17415 Start 1 of 3: New Loop for finding key and value           @RWS1
-       char [] ch;
        int lgth;
-       boolean encoding_is_ShortEnglish = true;                  // @RWS9
        // PK23256 begin
-       /*if (encoding.indexOf("8859-1")==-1 && encoding.indexOf(SHORT_ENGLISH)==-1  ) // @RWS9
-            encoding_is_ShortEnglish = false;                  // @RWS9*/
-
-       if (!encoding.endsWith("8859_1")   
-                       && !encoding.endsWith("8859-1") 
-                       && (encoding.indexOf("8859-1-Windows") == -1) 
-                       ) { 
-           encoding_is_ShortEnglish = false; 
-       } 
-
-
+       boolean encoding_is_ShortEnglish = isShortEnglishEncoding(encoding);                  // @RWS9
        // PK23256 end
        int pair_start=0,pair_start_index=0,pair_end=0,pair_end_index=0;
        int i = 0, j=0, k=0, equalSign=0,equalSign_index=0;
@@ -507,25 +645,161 @@ public class RequestUtils {
        }																								//PK75617
        return ht;
    }
+   
+       
+   static public Hashtable parseQueryString(byte b[], String encoding) {
+       
+       if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) { //PK75617
+           logger.entering(CLASS_NAME, "parseQueryString( byte[] , encoding --> [" + encoding + "])"); //PM35450.1
+       } 
+    
+       Charset charset = Charset.forName(encoding);
+       
+       int totalSize = 0; //PM53930
+       int dupSize = 0; // 728397
+       Hashtable<String, String[]> ht = new Hashtable<>();
+       HashSet<Integer> key_hset = new HashSet<>(); // 728397
+       // PK23256 begin
+       boolean encoding_is_ShortEnglish = isShortEnglishEncoding(encoding);
+       // PK23256 end
+       int pair_start = 0, equalSign = -1;
+       int lgth = b.length;
+
+       for (int i = 0; i <= lgth; i++) {
+           if (i == lgth || b[i] == '&') {
+               if (equalSign < pair_start) {
+                   equalSign = i;
+               }
+           } else {
+               if (b[i] == '=') {
+                   // Only record the first = after pair_start so we handle if a value has an = in it.
+                   if (equalSign < pair_start) {
+                       equalSign = i;
+                   }
+               }
+               continue;
+           }
+
+           //logger.logp(Level.FINE, CLASS_NAME,"parseQueryString", "equalSign =" + equalSign);
+
+           if ((equalSign < i) || (allowQueryParamWithNoEqual && equalSign == i)) //PM35450 , parameter is blah and not blah=
+           { // equal sign found at offset equalSign
+               String key = null; //PM92940 Start
+               String value = null;             
+                  
+               if (decodeParamViaReqEncoding && (!encoding_is_ShortEnglish)) {
+
+                   // data, start, (end-start),encoding, string
+                   key = parse_decode_Parameter(b, pair_start, equalSign - pair_start, encoding, "paramKey");
+
+                   if (equalSign == i) {
+                       value = key != null ? EMPTY_STRING : null;
+                   } else {
+                       int valueStart = equalSign + 1, valueLen = i - valueStart;
+                       value = parse_decode_Parameter(b, valueStart, valueLen, encoding, "paramValue");
+                   }
+
+                   if (ignoreInvalidQueryString && ((value == null) || (key == null))) {
+                       pair_start = i + 1;
+                       equalSign = i;
+                       continue;
+                   }
+
+               } else {
+                   key = parseName(b, pair_start, equalSign, charset);
+                   //PM35450 Start
+                   if (equalSign == i) {
+                       value = key != null ? EMPTY_STRING : null;
+                   } else {
+                       value = parseName(b, equalSign + 1, i, charset);
+                   }
+                   //PM35450 End
+
+                   if (ignoreInvalidQueryString && ((value == null) || (key == null))) { //PK75617
+                       pair_start = i + 1;
+                       equalSign = i;
+                       continue;
+                   } //PK75617
+                                         
+               } //PM92940 End
+
+               //logger.logp(Level.FINE, CLASS_NAME,"parseQueryString", "key="+key+", value="+value);
+               String valArray[] = new String[] { value };
+               String[] oldVals = (String[]) ht.put(key, valArray);
+               if (oldVals != null) {
+                   valArray = new String[oldVals.length + 1];
+                   System.arraycopy(oldVals, 0, valArray, 0, oldVals.length);
+                   valArray[oldVals.length] = value;
+                   ht.put(key, valArray);
+               } else {
+                   // 728397 Start 
+                   if (!(key_hset.add(key.hashCode()))) {
+                       dupSize++;// if false then count as duplicate hashcodes for unique keys
+                       if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+                           logger.logp(Level.FINE, CLASS_NAME, "parseQueryString", "duplicate hashCode generated by key --> " + key);
+                       }
+                       if (dupSize > maxDuplicateHashKeyParams) {
+                           logger.logp(Level.SEVERE, CLASS_NAME, "parseQueryString",
+                                       MessageFormat.format(nls.getString("Exceeding.maximum.hash.collisions"), new Object[] { maxDuplicateHashKeyParams }));
+
+                           throw new IllegalArgumentException();
+                       }
+                   } // 728397 End 
+               }
+           }
+           // 724365(PM53930) Start
+           totalSize++;
+           if (maxParamPerRequest != -1 && totalSize >= maxParamPerRequest) {
+               // possibly 10000 big enough, will never be here 
+               logger.logp(Level.SEVERE, CLASS_NAME, "parseQueryString",
+                           MessageFormat.format(nls.getString("Exceeding.maximum.parameters"), new Object[] { maxParamPerRequest, totalSize }));
+               throw new IllegalArgumentException();
+           } // 724365 End
+           pair_start = i + 1;
+           equalSign = i;
+       }
+
+       if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) { //PK75617
+           logger.exiting(CLASS_NAME, "parseQueryString(byte[], String)");
+       } //PK75617
+       return ht;  
+   }
+   
    /*
         * Parse a name in the query string.
         */
    // @MD17415 begin part 3 of 3 New Loop for finding key and value
-   static private String parseName(char [] ch, int startOffset, int endOffset) {
+   static private String parseName(final char [] ch, final int startOffset, final int endOffset) {
+       
+       if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) { //PK75617
+           logger.entering(CLASS_NAME, "parseName( char[] , startOffset --> [" + startOffset + "], endOffset  --> [" + endOffset + "])");
+       } 
+       
        int j = 0;
-       int startOffsetLocal = startOffset;   // local variable  -  @RWS2 
-       int endOffsetLocal = endOffset;       // local variable  -  @RWS2 
-       char [] chLocal = ch;                 // local variable  -  @RWS7
-       char [] c = new char [endOffsetLocal-startOffsetLocal];     // @RWS2
-       for (int i = startOffsetLocal; i < endOffsetLocal; i++) {  // @RWS2
-           switch (chLocal[i]) {                                   // @RWS7
+       char [] c = null;
+       for (int i = startOffset; i < endOffset; i++) {
+           switch (ch[i]) {
            case '+' :
+               if (c == null) {
+                   c = new char [endOffset-startOffset];
+                   j = i - startOffset;
+                   if (j != 0) {
+                       System.arraycopy(ch, startOffset, c, 0, j);
+                   }
+               }
                c[j++] = ' ';
                break;
            case '%' :
-               if (i+2 < endOffsetLocal) {   // @RWS2
-                   int num1 = Character.digit(chLocal[++i],16);   //@RWS7
-                   int num2 = Character.digit(chLocal[++i],16);   //@RWS7
+               if (i+2 < endOffset) {   // @RWS2
+                   if (c == null) {
+                       c = new char [endOffset-startOffset];
+                       j = i - startOffset;
+                       if (j != 0) {
+                           System.arraycopy(ch, startOffset, c, 0, j);
+                       }
+                   }
+                   int num1 = Character.digit(ch[++i],16);   //@RWS7
+                   int num2 = Character.digit(ch[++i],16);   //@RWS7
                    if (num1 == -1 || num2 == -1)             //@RWS5
                    {																	//PK75617 starts
                 	   if (ignoreInvalidQueryString)									
@@ -538,19 +812,98 @@ public class RequestUtils {
                    // c[j++] = (char)(num1*16 + num2);       //@RWS5
                    c[j++] = (char)((num1<<4) | num2);       //@RWS8
                } else {   // allow '%' at end of value or second to last character (as original code does)
-                   for (i=i; i<endOffsetLocal; i++)   // @RWS2
-                       c[j++] = chLocal[i];           // @RWS7
+                   if (c != null) {
+                       for (; i<endOffset; i++)   // @RWS2
+                           c[j++] = ch[i];        // @RWS7
+                   } else {
+                       i = endOffset;
+                   }
                }
                break;
            default :
-               c[j++] = chLocal[i];
+               if (c != null) {
+                   c[j++] = ch[i];
+               }
                break;
            } 
-       } 
+       }
+       String returnValue = c != null ? new String(c, 0, j) : new String(ch, startOffset, endOffset - startOffset);
        if (printbyteValueandcharParamdata && com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled()&&logger.isLoggable (Level.FINE))  
-           printValues(new String(c,0,j), "parseNameOUT");
-       return new String(c,0,j);
+           printValues(returnValue, "parseNameOUT");
+       return returnValue;
    }
+   
+   static private String parseName(final byte [] bytes, final int startOffset, final int endOffset, Charset charset) {
+       
+       if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) { //PK75617
+           logger.entering(CLASS_NAME, "parseName( byte[] , startOffset --> [" + startOffset + "], endOffset  --> [" + endOffset + "])");
+       } 
+       
+       int j = 0;
+       byte [] b = null;
+       for (int i = startOffset; i < endOffset; i++) {
+           switch (bytes[i]) {
+           case '+' :
+               if (b == null) {
+                   b = new byte [endOffset-startOffset];
+                   j = i - startOffset;
+                   if (j != 0) {
+                       System.arraycopy(bytes, startOffset, b, 0, j);
+                   }
+               }
+               b[j++] = ' ';
+               break;
+           case '%' :
+               if (i+2 < endOffset) {   // @RWS2
+                   if (b == null) {
+                       b = new byte [endOffset-startOffset];
+                       j = i - startOffset;
+                       if (j != 0) {
+                           System.arraycopy(bytes, startOffset, b, 0, j);
+                       }
+                   }
+                   
+                   int num1 = Character.digit(bytes[++i],16);   //@RWS7
+                   int num2 = Character.digit(bytes[++i],16);   //@RWS7
+                   
+                   if (num1 == -1 || num2 == -1)             //@RWS5
+                   {                                                                                                                                    //PK75617 starts
+                           if (ignoreInvalidQueryString)                                                                        
+                           {
+                                   logger.logp(Level.WARNING, CLASS_NAME,"parseName", "invalid.query.string");
+                                   return null;
+                           }                                                                                                                            //PK75617 ends
+                       throw new IllegalArgumentException(); //@RWS5
+                   }                                                                                                                                    //PK75617
+                   // c[j++] = (char)(num1*16 + num2);       //@RWS5
+                   b[j++] = (byte)((num1<<4) | num2);       //@RWS8
+                  
+               } else {   // allow '%' at end of value or second to last character (as original code does)
+                   if (b != null) {
+                       for (; i<endOffset; i++)   // @RWS2
+                           b[j++] = bytes[i];        // @RWS7
+                   } else {
+                       i = endOffset;
+                   }
+               }
+               break;
+           default :
+               if (b != null) {
+                   b[j++] = bytes[i];
+               }
+               break;
+           } 
+       }
+       
+       String returnValue = b != null ?  new String(b, 0 , j , charset) : new String(bytes, startOffset, endOffset - startOffset , charset); 
+           
+       if (printbyteValueandcharParamdata && com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled()&&logger.isLoggable (Level.FINE))  
+           printValues(returnValue, "parseNameOUT");
+       
+       return returnValue;
+   }
+   
+   
    // @MD17415 end part 3 of 3 New Loop for finding key and value
    
    /**
@@ -579,6 +932,49 @@ public class RequestUtils {
     */
    static private String parse_decode_Parameter(char[] data, int start, int length, String encoding, String val) {
 
+       if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) { //PK75617
+           logger.entering(CLASS_NAME, "parse_decode_Parameter( char[] , start --> [" + start + "], length  --> [" + length + "], encoding --> [" + encoding + "], val  --> [" + val + ")");
+       } 
+       
+       String paramData = null;     
+       paramData = new String(data, start, length);
+       
+       if (printbyteValueandcharParamdata && com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled()&&logger.isLoggable (Level.FINE)){  
+           printValues(paramData, "parsed " +val);                  
+       } 
+       try {                   
+           paramData = URLDecoder.decode(paramData, encoding);
+           if (printbyteValueandcharParamdata && com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled()&&logger.isLoggable (Level.FINE))  
+               printValues(paramData, "decoded " + val);                        
+       }catch ( UnsupportedEncodingException uee ) {
+           logger.logp(Level.SEVERE, CLASS_NAME,"parse_decode_Parameter", "unsupported exception--> ", uee);
+           throw new IllegalArgumentException();
+       }catch ( IllegalArgumentException ie ) {
+           if (ignoreInvalidQueryString)                                                                        
+           {
+               logger.logp(Level.WARNING, CLASS_NAME,"parse_decode_Parameter", "invalid.query.string");
+               return null;
+           }               
+           throw ie;
+       }
+
+       return paramData;
+   }
+   
+   /**
+    * @param data
+    * @param start
+    * @param length
+    * @param encoding
+    * @param val
+    * @return
+    */
+   static private String parse_decode_Parameter(byte[] data, int start, int length, String encoding, String val) {
+
+       if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) { //PK75617
+           logger.entering(CLASS_NAME, "parse_decode_Parameter( byte[] , start --> [" + start + "], length  --> [" + length + "], encoding --> [" + encoding + "], val  --> [" + val + ")");
+       } 
+       
        String paramData = null;     
        paramData = new String(data, start, length);
        

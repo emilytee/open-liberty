@@ -27,6 +27,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.ws.rs.HttpMethod;
+import javax.ws.rs.NotFoundException;
 import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.MultivaluedMap;
@@ -45,6 +46,7 @@ import org.apache.cxf.jaxrs.lifecycle.ResourceProvider;
 import org.apache.cxf.jaxrs.lifecycle.SingletonResourceProvider;
 import org.apache.cxf.jaxrs.model.ClassResourceInfo;
 import org.apache.cxf.jaxrs.model.OperationResourceInfo;
+import org.apache.cxf.jaxrs.model.OperationResourceInfoStack;
 import org.apache.cxf.jaxrs.model.URITemplate;
 import org.apache.cxf.jaxrs.provider.ServerProviderFactory;
 import org.apache.cxf.jaxrs.utils.ExceptionUtils;
@@ -57,6 +59,8 @@ import org.apache.cxf.message.MessageUtils;
 import org.apache.cxf.phase.AbstractPhaseInterceptor;
 import org.apache.cxf.phase.Phase;
 
+import com.ibm.websphere.ras.Tr;
+import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.jaxrs20.JaxRsConstants;
 import com.ibm.ws.jaxrs20.cache.LibertyJaxRsResourceMethodCache;
@@ -64,6 +68,7 @@ import com.ibm.ws.jaxrs20.cache.LibertyJaxRsResourceMethodCache.ResourceMethodCa
 
 public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
 
+    private static final TraceComponent tc = Tr.register(JAXRSInInterceptor.class);
     private static final Logger LOG = LogUtils.getL7dLogger(JAXRSInInterceptor.class);
     private static final ResourceBundle BUNDLE = BundleUtils.getBundle(JAXRSInInterceptor.class);
     private static final String RESOURCE_METHOD = "org.apache.cxf.resource.method";
@@ -73,7 +78,7 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
         super(Phase.UNMARSHAL);
     }
 
-    @FFDCIgnore(value = { Fault.class, RuntimeException.class })
+    @FFDCIgnore(value = { Fault.class, RuntimeException.class, IOException.class })
     @Override
     public void handleMessage(Message message) {
         final Exchange exchange = message.getExchange();
@@ -90,6 +95,8 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
                 convertExceptionToResponseIfPossible(ex.getCause(), message);
             } catch (RuntimeException ex) {
                 convertExceptionToResponseIfPossible(ex, message);
+            } catch (IOException ex) {
+                convertExceptionToResponseIfPossible(ex, message);
             }
         }
 
@@ -101,8 +108,8 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
         }
     }
 
-    @FFDCIgnore(value = { WebApplicationException.class, IOException.class })
-    private void processRequest(Message message, Exchange exchange) {
+    @FFDCIgnore(value = { WebApplicationException.class })
+    private void processRequest(Message message, Exchange exchange) throws IOException {
 
         ServerProviderFactory providerFactory = ServerProviderFactory.getInstance(message);
 
@@ -174,6 +181,8 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
 
         OperationResourceInfo ori = null;
 
+        OperationResourceInfoStack oriStack = null;
+
         boolean shouldFind = true;
 
         String ckey = message.get(Message.BASE_PATH) + ":" + rawPath + ":" + httpMethod + ":" + requestContentType + ":" + acceptTypes;
@@ -189,10 +198,26 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
                 }
 
                 setExchangeProperties(message, exchange, ori, matchedValues, resources.size());
+
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "OperationResourceInfoStack on message: " + message.get(OperationResourceInfoStack.class));
+                }
+                if (message.get(OperationResourceInfoStack.class) == null) {
+                    oriStack = rmCache.getOperationResourceInfoStack();
+                    if (oriStack != null) {
+                        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                            Tr.debug(tc, "Setting OperationResourceInfoStack on message: " + oriStack);
+                        }
+                        message.put(OperationResourceInfoStack.class, oriStack);
+                    }
+                }
                 shouldFind = false;
             }
         }
 
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            Tr.debug(tc, "shouldFind = " + shouldFind);
+        }
         if (shouldFind == true) {
 
             Map<ClassResourceInfo, MultivaluedMap<String, String>> matchedResources = JAXRSUtils.selectResourceClass(resources, rawPath, message);
@@ -203,7 +228,8 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
                                                 BUNDLE,
                                                 message.get(Message.REQUEST_URI),
                                                 rawPath);
-                LOG.warning(errorMsg.toString());
+                Level logLevel = JAXRSUtils.getExceptionLogLevel(message, NotFoundException.class);
+                LOG.log(logLevel == null ? Level.FINE : logLevel, errorMsg.toString());
                 Response resp = JAXRSUtils.createResponse(resources, message, errorMsg.toString(),
                                                           Response.Status.NOT_FOUND.getStatusCode(), false);
                 throw ExceptionUtils.toNotFoundException(null, resp);
@@ -211,12 +237,13 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
 
             try {
                 ori = JAXRSUtils.findTargetMethod(matchedResources, message,
-                                                  httpMethod, matchedValues, requestContentType, acceptContentTypes, true);
+                                                  httpMethod, matchedValues, requestContentType, acceptContentTypes, true, true);
                 setExchangeProperties(message, exchange, ori, matchedValues, resources.size());
-
+                // The oriStack should now be set.
+                oriStack = message.get(OperationResourceInfoStack.class);
                 if (resourceMethodCache != null) {
                     String mediaType = (String) message.getExchange().get(Message.CONTENT_TYPE);
-                    resourceMethodCache.put(ckey, ori, matchedValues, mediaType);
+                    resourceMethodCache.put(ckey, ori, matchedValues, mediaType, oriStack);
                 }
 
             } catch (WebApplicationException ex) {
@@ -227,6 +254,11 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
                 } else {
                     throw ex;
                 }
+            }
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "Request path is: " + rawPath);
+                Tr.debug(tc, "Request HTTP method is: " + httpMethod);
+                Tr.debug(tc, "Request contentType is: " + requestContentType);
             }
 
             if (LOG != null && LOG.isLoggable(Level.FINE)) {
@@ -251,13 +283,9 @@ public class JAXRSInInterceptor extends AbstractPhaseInterceptor<Message> {
         }
 
         //Process parameters
-        try {
-            List<Object> params = JAXRSUtils.processParameters(ori, matchedValues, message);
-            message.setContent(List.class, params);
-        } catch (IOException ex) {
-            convertExceptionToResponseIfPossible(ex, message);
-        }
 
+        List<Object> params = JAXRSUtils.processParameters(ori, matchedValues, message);
+        message.setContent(List.class, params);
     }
 
     private void convertExceptionToResponseIfPossible(Throwable ex, Message message) {

@@ -47,14 +47,17 @@ public class JDBCLoadFromAppTest extends FATServletClient {
     public static void setUp() throws Exception {
         WebArchive derbyApp = ShrinkWrap.create(WebArchive.class, "derbyApp.war")
                         .addPackage("web.derby") //
-                        .addAsLibrary(new File("publish/servers/com.ibm.ws.jdbc.fat.loadfromapp/derby/derby-10.11.1.1.jar")) //
+                        .addAsLibrary(new File("publish/shared/resources/derby/derby.jar")) //
                         .addPackage("jdbc.driver.proxy"); // delegates to the Derby JDBC driver
         ShrinkHelper.exportAppToServer(server, derbyApp);
 
         WebArchive otherApp = ShrinkWrap.create(WebArchive.class, "otherApp.war")
                         .addPackage("web.other") //
                         .addPackage("jdbc.driver.mini") // barely usable, fake jdbc driver included in app
+                        .addPackage("jdbc.driver.mini.jse") // java.sql.Driver implementation for the above
+                        .addAsServiceProvider(java.sql.Driver.class, jdbc.driver.mini.jse.DriverImpl.class)
                         .addPackage("jdbc.driver.proxy"); // delegates to the "mini" JDBC driver
+
         ShrinkHelper.exportAppToServer(server, otherApp);
 
         server.addInstalledAppForValidation("derbyApp");

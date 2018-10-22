@@ -1,5 +1,5 @@
 #*******************************************************************************
-# Copyright (c) 2017 IBM Corporation and others.
+# Copyright (c) 2017, 2018 IBM Corporation and others.
 # All rights reserved. This program and the accompanying materials
 # are made available under the terms of the Eclipse Public License v1.0
 # which accompanies this distribution, and is available at
@@ -14,7 +14,7 @@ bVersion=1.0
 Bundle-Name: WAS JSF 2.3
 Bundle-SymbolicName: com.ibm.ws.org.apache.myfaces.2.3
 Bundle-Description: WAS JSF 2.3, version ${bVersion}
-Implementation-Version: 2.3.0
+Implementation-Version: 2.3.2
 WLP-ServerName: IBM WebSphere Application Server
 WLP-ServerVersion: ${liberty.beta.version}
 
@@ -43,7 +43,7 @@ com.ibm.ws.jsf.2.3.taglib; \
    provide:='com.ibm.wsspi.jsp.taglib.config.GlobalTagLibConfig'; \
    properties:="service.vendor=IBM", \
 com.ibm.ws.myfaces.initializer; \
-     implementation:=org.apache.myfaces.ee.MyFacesContainerInitializer; \
+     implementation:=com.ibm.ws.jsf.ee.WASMyFacesContainerInitializer; \
      provide:=javax.servlet.ServletContainerInitializer; \
      properties:="service.vendor=IBM,service.ranking:Integer=101", \
 com.ibm.ws.jsf.2.3.injection.class.list.collaborator; \
@@ -72,10 +72,10 @@ com.ibm.ws.jsf.23.dd; \
 
 instrument.ffdc: false
 instrument.classesExcludes: \
-    **/org/**
+    org/**/*.class
 
 Include-Resource: \
-  @${repo;org.apache.myfaces.core.impl;2.3.0.SNAPSHOT;EXACT}!/META-INF/**, \
+  @${repo;org.apache.myfaces.core.impl;2.3.2;EXACT}!/META-INF/**, \
   @${repo;com.ibm.websphere.javaee.jsf.2.3}!/META-INF/resources/**, \
   @${repo;com.ibm.websphere.javaee.jsf.2.3}!/META-INF/internal-resources/**, \
   META-INF=@src/META-INF
@@ -87,7 +87,7 @@ Export-Package: !org.apache.myfaces.buildtools.*, \
 org.apache.myfaces.*;version="1.0.17", \
 com.ibm.ws.jsf.cdi, \
 com.ibm.ws.jsf.config.*;thread-context=true;mandatory:="thread-context", \
-com.ibm.ws.jsf.ext, \
+com.ibm.ws.jsf.ee, \
 com.ibm.ws.jsf.spi.*, \
 com.ibm.ws.jsf.extprocessor, \
 org.apache.myfaces.application;thread-context=true;mandatory:="thread-context", \
@@ -103,11 +103,14 @@ org.apache.myfaces.context.servlet;thread-context=true;mandatory:="thread-contex
 org.apache.myfaces.config.annotation;thread-context=true;mandatory:="thread-context", \
 org.apache.myfaces.config.impl.digester.elements;thread-context=true;mandatory:="thread-context", \
 org.apache.myfaces.flow;thread-context=true;mandatory:="thread-context", \
+org.apache.myfaces.flow.cdi;thread-context=true;mandatory:="thread-context", \
 org.apache.myfaces.lifecycle;thread-context=true;mandatory:="thread-context", \
 org.apache.myfaces.renderkit;thread-context=true;mandatory:="thread-context", \
 org.apache.myfaces.renderkit.html;thread-context=true;mandatory:="thread-context", \
+org.apache.myfaces.shared.context.flash;thread-context=true;mandatory:="thread-context", \
 org.apache.myfaces.shared.taglib;thread-context=true;mandatory:="thread-context", \
 org.apache.myfaces.shared.taglib.core;thread-context=true;mandatory:="thread-context", \
+org.apache.myfaces.shared.util;thread-context=true;mandatory:="thread-context", \
 org.apache.myfaces.spi.impl;thread-context=true;mandatory:="thread-context", \
 org.apache.myfaces.taglib.core;thread-context=true;mandatory:="thread-context", \
 org.apache.myfaces.taglib.html;thread-context=true;mandatory:="thread-context", \
@@ -138,7 +141,7 @@ Import-Package: !com.google.inject, \
  *
 
 -buildpath: \
-	org.apache.myfaces.core.impl;strategy=exact;version=2.3.0.SNAPSHOT,\
+	org.apache.myfaces.core.impl;strategy=exact;version=2.3.2,\
 	org.apache.myfaces.buildtools:myfaces-builder-annotations;version=1.0.9,\
 	com.ibm.ws.jsf.shared;version=latest,\
 	com.ibm.websphere.javaee.jsf.2.3;version=latest,\
@@ -157,16 +160,16 @@ Import-Package: !com.google.inject, \
 	com.ibm.ws.anno;version=latest,\
 	com.ibm.ws.managedobject;version=latest,\
 	com.ibm.ws.jsp;version=latest,\
-	com.ibm.ws.org.apache.commons.collections.3.2.1;version=latest,\
+	com.ibm.ws.org.apache.commons.collections;version=latest,\
 	com.ibm.ws.beanvalidation.core;version=latest,\
 	com.ibm.websphere.javaee.el.3.0;version=latest,\
 	com.ibm.websphere.javaee.jsp.2.3;version=latest,\
 	com.ibm.websphere.javaee.servlet.4.0;version=latest,\
-	com.ibm.websphere.javaee.cdi.1.2;version=latest,\
+	com.ibm.websphere.javaee.cdi.2.0;version=latest,\
 	com.ibm.websphere.javaee.ejb.3.2;version=latest,\
 	com.ibm.websphere.javaee.websocket.1.1;version=latest,\
-	com.ibm.websphere.javaee.validation.1.1;version=latest,\
-	com.ibm.ws.cdi.1.2.interfaces;version=latest,\
+	com.ibm.websphere.javaee.validation.2.0;version=latest,\
+	com.ibm.ws.cdi.interfaces;version=latest,\
 	com.ibm.ws.logging.core,\
 	com.ibm.websphere.appserver.spi.kernel.service,\
 	com.ibm.websphere.org.osgi.core;version=latest,\

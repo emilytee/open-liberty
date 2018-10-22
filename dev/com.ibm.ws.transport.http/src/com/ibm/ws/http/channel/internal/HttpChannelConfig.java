@@ -22,6 +22,7 @@ import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.ffdc.FFDCFilter;
 import com.ibm.ws.genericbnf.internal.GenericUtils;
 import com.ibm.ws.http.channel.h2internal.Constants;
+import com.ibm.ws.http.dispatcher.internal.HttpDispatcher;
 import com.ibm.ws.http.internal.HttpEndpointImpl;
 import com.ibm.ws.http.logging.internal.DisabledLogger;
 import com.ibm.wsspi.http.channel.values.VersionValues;
@@ -122,8 +123,10 @@ public class HttpChannelConfig {
     private boolean preventResponseSplit = true;
     /** PI11176 - Attempt to purge the data at the close of the connection */
     private boolean attemptPurgeData = false;
+
     /** PI57542 - Throw IOE for inbound connections */
-    private boolean throwIOEForInboundConnections = false;
+    private Boolean throwIOEForInboundConnections = null;
+
     /** 738893 - Should the HTTP Channel skip adding the quotes to the cookie's path attribute */
     private boolean skipCookiePathQuotes = false;
     /** The amount of time the connection will be left open when HTTP/2 goes into an idle state */
@@ -131,6 +134,13 @@ public class HttpChannelConfig {
     private int h2ConnectionReadWindowSize = Constants.SPEC_INITIAL_WINDOW_SIZE; // init the connection read window to the spec max
     /** PI81572 Purge the remaining response body off the wire when clear is called */
     private boolean purgeRemainingResponseBody = true;
+
+    /** Set as an attribute to the HttpEndpoint **/
+    private Boolean useH2ProtocolAttribute = null;
+
+    private int http2ConnectionIdleTimeout = 0;
+    private int http2MaxConcurrentStreams = 200;
+    private int http2MaxFrameSize = 57344; //Default to 56kb
 
     /**
      * Constructor for an HTTP channel config object.
@@ -160,6 +170,7 @@ public class HttpChannelConfig {
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.entry(tc, "parseConfig: " + cc.getName());
         }
+
         Map<Object, Object> propsIn = cc.getPropertyBag();
 
         Map<Object, Object> props = new HashMap<Object, Object>();
@@ -167,7 +178,7 @@ public class HttpChannelConfig {
         String key;
         Object value;
 
-        // match keys independent of csae.
+        // match keys independent of case.
         // So this is a bit ugly, but the parsing code is not state independent, meaning if it parses A then and
         // only then it will parse B, and we can't be certain that only properties that we know about from the HTTP Config
         // are in this Map (so we can't just lower case everything).  So, to be case independent we need to convert
@@ -347,9 +358,28 @@ public class HttpChannelConfig {
                 continue;
             }
 
+            if (key.equalsIgnoreCase(HttpConfigConstants.PROPNAME_PROTOCOL_VERSION)) {
+                props.put(HttpConfigConstants.PROPNAME_PROTOCOL_VERSION, value);
+                continue;
+            }
+
+            if (key.equalsIgnoreCase(HttpConfigConstants.PROPNAME_H2_CONNECTION_IDLE_TIMEOUT)) {
+                props.put(HttpConfigConstants.PROPNAME_H2_CONNECTION_IDLE_TIMEOUT, value);
+                continue;
+            }
+
+            if (key.equalsIgnoreCase(HttpConfigConstants.PROPNAME_H2_MAX_CONCURRENT_STREAMS)) {
+                props.put(HttpConfigConstants.PROPNAME_H2_MAX_CONCURRENT_STREAMS, value);
+            }
+
+            if (key.equalsIgnoreCase(HttpConfigConstants.PROPNAME_H2_MAX_FRAME_SIZE)) {
+                props.put(HttpConfigConstants.PROPNAME_H2_MAX_FRAME_SIZE, value);
+            }
+
             props.put(key, value);
         }
 
+        parseProtocolVersion(props);
         parsePersistence(props);
         parseOutgoingVersion(props);
         parseBufferType(props);
@@ -387,6 +417,9 @@ public class HttpChannelConfig {
         parseH2ConnCloseTimeout(props);
         parseH2ConnReadWindowSize(props);
         parsePurgeRemainingResponseBody(props); //PI81572
+        parseH2ConnectionIdleTimeout(props);
+        parseH2MaxConcurrentStreams(props);
+        parseH2MaxFrameSize(props);
 
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.exit(tc, "parseConfig");
@@ -631,6 +664,61 @@ public class HttpChannelConfig {
                 FFDCFilter.processException(nfe, getClass().getName() + ".parseWriteTimeout", "1");
                 if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
                     Tr.event(tc, "Config: Invalid write timeout; " + value);
+                }
+            }
+        }
+    }
+
+    private void parseH2ConnectionIdleTimeout(Map<Object, Object> props) {
+        Object value = props.get(HttpConfigConstants.PROPNAME_H2_CONNECTION_IDLE_TIMEOUT);
+        if (null != value) {
+            try {
+                this.http2ConnectionIdleTimeout = TIMEOUT_MODIFIER * minLimit(convertInteger(value), HttpConfigConstants.MIN_TIMEOUT);
+                if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+                    Tr.event(tc, "Config: HTTP/2 Connection idle timeout is " + getH2ConnectionIdleTimeout());
+                }
+            } catch (NumberFormatException nfe) {
+                FFDCFilter.processException(nfe, getClass().getName() + ".parseH2ConnectionIdleTimeout", "1");
+                if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+                    Tr.event(tc, "Config: Invalid HTTP/2 connection idle timeout; " + value);
+                }
+
+            }
+        }
+
+    }
+
+    private void parseH2MaxConcurrentStreams(Map<Object, Object> props) {
+        Object value = props.get(HttpConfigConstants.PROPNAME_H2_MAX_CONCURRENT_STREAMS);
+        if (null != value) {
+            try {
+                this.http2MaxConcurrentStreams = convertInteger(value);
+                if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+                    Tr.event(tc, "Config: HTTP/2 Max Concurrent Streams is " + getH2MaxConcurrentStreams());
+                }
+            } catch (NumberFormatException nfe) {
+                FFDCFilter.processException(nfe, getClass().getName() + ".parseH2MaxConcurrentStreams", "1");
+                if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+                    Tr.event(tc, "Config: Invalid HTTP/2 Max Concurrent Streams; " + value);
+
+                }
+            }
+        }
+    }
+
+    private void parseH2MaxFrameSize(Map<Object, Object> props) {
+        Object value = props.get(HttpConfigConstants.PROPNAME_H2_MAX_FRAME_SIZE);
+        if (null != value) {
+            try {
+                this.http2MaxFrameSize = rangeLimit(convertInteger(value), HttpConfigConstants.MIN_LIMIT_FRAME_SIZE, HttpConfigConstants.MAX_LIMIT_FRAME_SIZE);
+                if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+                    Tr.event(tc, "Config: HTTP/2 Max Frame Size is " + getH2MaxFrameSize());
+                }
+            } catch (NumberFormatException nfe) {
+                FFDCFilter.processException(nfe, getClass().getName() + ".parseH2MaxFrameSize", "1");
+                if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
+                    Tr.event(tc, "Config: Invalid HTTP/2 Frame Size; " + value);
+
                 }
             }
         }
@@ -1239,6 +1327,53 @@ public class HttpChannelConfig {
     }
 
     /**
+     * Check the configuration to see if there is a desired http protocol version
+     * that has been provided for this HTTP Channel
+     *
+     * @param props
+     */
+    private void parseProtocolVersion(Map<?, ?> props) {
+        Object protocolVersionProperty = props.get(HttpConfigConstants.PROPNAME_PROTOCOL_VERSION);
+        if (null != protocolVersionProperty) {
+
+            String protocolVersion = ((String) protocolVersionProperty).toLowerCase();
+            if (HttpConfigConstants.PROTOCOL_VERSION_11.equals(protocolVersion)) {
+                this.useH2ProtocolAttribute = Boolean.FALSE;
+            } else if (HttpConfigConstants.PROTOCOL_VERSION_2.equals(protocolVersion)) {
+                this.useH2ProtocolAttribute = Boolean.TRUE;
+
+            }
+
+            if ((TraceComponent.isAnyTracingEnabled()) && (tc.isEventEnabled()) && this.useH2ProtocolAttribute != null) {
+                Tr.event(tc, "HTTP Channel Config: versionProtocol has been set to " + protocolVersion);
+            }
+
+        }
+
+    }
+
+    /**
+     * Configured http protocol version used by this HttpChannel
+     *
+     * @return
+     */
+    public Boolean getUseH2ProtocolAttribute() {
+        return this.useH2ProtocolAttribute;
+    }
+
+    public int getH2ConnectionIdleTimeout() {
+        return this.http2ConnectionIdleTimeout;
+    }
+
+    public int getH2MaxFrameSize() {
+        return this.http2MaxFrameSize;
+    }
+
+    public int getH2MaxConcurrentStreams() {
+        return this.http2MaxConcurrentStreams;
+    }
+
+    /**
      * Convert a String to a boolean value. If the string does not
      * match "true", then it defaults to false.
      *
@@ -1705,8 +1840,16 @@ public class HttpChannelConfig {
      * @return boolean
      */
     public boolean throwIOEForInboundConnections() {
-        //PI57542
-        return this.throwIOEForInboundConnections;
+        //If the httpOption throwIOEForInboundConnections is defined, return that value
+        if (this.throwIOEForInboundConnections != null)
+            return this.throwIOEForInboundConnections; //PI57542
+
+        //Otherwise, verify if a declarative service has been set to dictate the behavior
+        //for this property. If not, return false.
+        Boolean IOEForInboundConnectionsBehavior = HttpDispatcher.useIOEForInboundConnectionsBehavior();
+
+        return ((IOEForInboundConnectionsBehavior != null) ? IOEForInboundConnectionsBehavior : Boolean.FALSE);
+
     }
 
     public long getH2ConnCloseTimeout() {
@@ -1719,7 +1862,7 @@ public class HttpChannelConfig {
 
     /**
      * Query whether or not the HTTP Channel should purge remaining response data
-     * 
+     *
      * @return boolean
      */
     public boolean shouldPurgeRemainingResponseBody() {

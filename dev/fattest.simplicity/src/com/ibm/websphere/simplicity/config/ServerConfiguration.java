@@ -28,6 +28,7 @@ import javax.xml.namespace.QName;
 import org.w3c.dom.Element;
 
 import com.ibm.websphere.simplicity.config.wim.FederatedRepository;
+import com.ibm.websphere.simplicity.config.wim.LdapFilters;
 import com.ibm.websphere.simplicity.config.wim.LdapRegistry;
 
 /**
@@ -55,6 +56,12 @@ public class ServerConfiguration implements Cloneable {
     @XmlElement(name = "httpEndpoint")
     private ConfigElementList<HttpEndpoint> httpEndpoints;
 
+    @XmlElement(name = "virtualHost")
+    private ConfigElementList<VirtualHost> virtualHosts;
+
+    @XmlElement(name = "ssl")
+    private ConfigElementList<SSLConfig> ssls;
+
     @XmlElement(name = "wasJmsEndpoint")
     private ConfigElementList<JmsEndpoint> wasJmsEndpoints;
 
@@ -63,6 +70,9 @@ public class ServerConfiguration implements Cloneable {
 
     @XmlElement(name = "httpSession")
     private HttpSession httpSession;
+
+    @XmlElement(name = "httpSessionCache")
+    private ConfigElementList<HttpSessionCache> httpSessionCaches;
 
     @XmlElement(name = "httpSessionDatabase")
     private HttpSessionDatabase httpSessionDatabase;
@@ -73,11 +83,17 @@ public class ServerConfiguration implements Cloneable {
     @XmlElement(name = "webApplication")
     private ConfigElementList<WebApplication> webApplications;
 
+    @XmlElement(name = "springBootApplication")
+    private ConfigElementList<SpringBootApplication> springBootApplications;
+
     @XmlElement(name = "cloudant")
     private ConfigElementList<Cloudant> cloudants;
 
     @XmlElement(name = "cloudantDatabase")
     private ConfigElementList<CloudantDatabase> cloudantDatabases;
+
+    @XmlElement(name = "concurrencyPolicy")
+    private ConfigElementList<ConcurrencyPolicy> concurrencyPolicies;
 
     @XmlElement(name = "connectionFactory")
     private ConfigElementList<ConnectionFactory> connectionFactories;
@@ -126,6 +142,9 @@ public class ServerConfiguration implements Cloneable {
 
     @XmlElement(name = "managedThreadFactory")
     private ConfigElementList<ManagedThreadFactory> managedThreadFactories;
+
+    @XmlElement(name = "monitor")
+    private ConfigElementList<Monitor> monitors;
 
     @XmlElement(name = "resourceAdapter")
     private ConfigElementList<ResourceAdapter> resourceAdapters;
@@ -215,6 +234,9 @@ public class ServerConfiguration implements Cloneable {
     @XmlElement(name = "apiDiscovery")
     private APIDiscoveryElement apiDiscoveryElement;
 
+    @XmlElement(name = "mpMetrics")
+    private MPMetricsElement mpMetricsElement;
+
     @XmlElement(name = "openapi")
     private OpenAPIElement openAPIElement;
 
@@ -223,6 +245,9 @@ public class ServerConfiguration implements Cloneable {
 
     @XmlElement(name = "ldapRegistry")
     private ConfigElementList<LdapRegistry> ldapRegistries;
+
+    @XmlElement(name = "activedLdapFilterProperties")
+    private ConfigElementList<LdapFilters> activedLdapFilterProperties;
 
     @XmlAnyAttribute
     private Map<QName, Object> unknownAttributes;
@@ -348,6 +373,12 @@ public class ServerConfiguration implements Cloneable {
         return this.cloudantDatabases;
     }
 
+    public ConfigElementList<ConcurrencyPolicy> getConcurrencyPolicies() {
+        if (this.concurrencyPolicies == null)
+            this.concurrencyPolicies = new ConfigElementList<ConcurrencyPolicy>();
+        return this.concurrencyPolicies;
+    }
+
     public ConfigElementList<ContextService> getContextServices() {
         if (this.contextServices == null)
             this.contextServices = new ConfigElementList<ContextService>();
@@ -370,6 +401,18 @@ public class ServerConfiguration implements Cloneable {
             this.httpEndpoints = new ConfigElementList<HttpEndpoint>();
         }
         return this.httpEndpoints;
+    }
+
+    /**
+     * Retrieves the list of VirtualHosts in this configuration
+     *
+     * @return the list of VirtualHosts in this configuration
+     */
+    public ConfigElementList<VirtualHost> getVirtualHosts() {
+        if (this.virtualHosts == null) {
+            this.virtualHosts = new ConfigElementList<>();
+        }
+        return this.virtualHosts;
     }
 
     /**
@@ -404,6 +447,15 @@ public class ServerConfiguration implements Cloneable {
             this.httpSession = new HttpSession();
         }
         return this.httpSession;
+    }
+
+    /**
+     * @return the list of httpSesssionCache configuration elements
+     */
+    public ConfigElementList<HttpSessionCache> getHttpSessionCaches() {
+        if (this.httpSessionCaches == null)
+            this.httpSessionCaches = new ConfigElementList<HttpSessionCache>();
+        return this.httpSessionCaches;
     }
 
     /**
@@ -482,6 +534,12 @@ public class ServerConfiguration implements Cloneable {
         return this.managedThreadFactories;
     }
 
+    public ConfigElementList<Monitor> getMonitors() {
+        if (monitors == null)
+            monitors = new ConfigElementList<Monitor>();
+        return monitors;
+    }
+
     public ConfigElementList<ResourceAdapter> getResourceAdapters() {
         if (this.resourceAdapters == null)
             this.resourceAdapters = new ConfigElementList<ResourceAdapter>();
@@ -500,6 +558,16 @@ public class ServerConfiguration implements Cloneable {
             this.webContainer = new WebContainerElement();
         }
         return this.webContainer;
+    }
+
+    /**
+     * @return the ssl configurations for this server
+     */
+    public ConfigElementList<SSLConfig> getSsls() {
+        if (this.ssls == null) {
+            this.ssls = new ConfigElementList<SSLConfig>();
+        }
+        return this.ssls;
     }
 
     /**
@@ -544,6 +612,14 @@ public class ServerConfiguration implements Cloneable {
         }
 
         return this.openAPIElement;
+    }
+
+    public MPMetricsElement getMPMetricsElement() {
+        if (this.mpMetricsElement == null) {
+            this.mpMetricsElement = new MPMetricsElement();
+        }
+
+        return this.mpMetricsElement;
     }
 
     /**
@@ -617,6 +693,16 @@ public class ServerConfiguration implements Cloneable {
             this.webApplications = new ConfigElementList<WebApplication>();
         }
         return this.webApplications;
+    }
+
+    /**
+     * @return explicitly installed Spring Boot applications
+     */
+    public ConfigElementList<SpringBootApplication> getSpringBootApplications() {
+        if (this.springBootApplications == null) {
+            this.springBootApplications = new ConfigElementList<SpringBootApplication>();
+        }
+        return this.springBootApplications;
     }
 
     /**
@@ -1039,5 +1125,17 @@ public class ServerConfiguration implements Cloneable {
             this.ldapRegistries = new ConfigElementList<LdapRegistry>();
         }
         return this.ldapRegistries;
+    }
+
+    /**
+     * Get all 'activedLdapFilterProperties' elements.
+     *
+     * @return All {@link LdapFilters} configuration instances.
+     */
+    public ConfigElementList<LdapFilters> getActivedLdapFilterProperties() {
+        if (this.activedLdapFilterProperties == null) {
+            this.activedLdapFilterProperties = new ConfigElementList<LdapFilters>();
+        }
+        return this.activedLdapFilterProperties;
     }
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2003, 2009 IBM Corporation and others.
+ * Copyright (c) 2003, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -15,6 +15,7 @@ import java.nio.ByteBuffer;
 import java.nio.ReadOnlyBufferException;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
@@ -23,12 +24,14 @@ import javax.net.ssl.SSLEngineResult.HandshakeStatus;
 import javax.net.ssl.SSLEngineResult.Status;
 import javax.net.ssl.SSLException;
 
+import com.ibm.websphere.channelfw.FlowType;
+import com.ibm.websphere.channelfw.osgi.CHFWBundle;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
-import com.ibm.ws.ffdc.FFDCFilter;
-import com.ibm.websphere.channelfw.FlowType;
 import com.ibm.websphere.ssl.Constants;
 import com.ibm.websphere.ssl.JSSEHelper;
+import com.ibm.ws.channel.ssl.internal.SSLAlpnNegotiator.ThirdPartyAlpnNegotiator;
+import com.ibm.ws.ffdc.FFDCFilter;
 import com.ibm.wsspi.bytebuffer.WsByteBuffer;
 import com.ibm.wsspi.bytebuffer.WsByteBufferUtils;
 import com.ibm.wsspi.channelfw.ChannelFrameworkFactory;
@@ -129,11 +132,9 @@ public class SSLUtils {
         }
 
         TCPWriteRequestContext deviceWriteInterface = xConnLink.getDeviceWriteInterface();
-        //Start PI52696
-        //Note: For each loop, the thread will sleep for 1000ms. This property defines the time in seconds, so
-        //each second will have 1 Tread.sleep(100) calls.
-        int amountToYield = xConnLink.getChannel().getTimeoutValueInSSLClosingHandshake();
-        int loopCounter = 0;
+
+        int configuredTimeoutValue = xConnLink.getChannel().getTimeoutValueInSSLClosingHandshake();
+        long timeoutTimestamp = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(configuredTimeoutValue);
 
         try {
             Status status = null;
@@ -165,7 +166,8 @@ public class SSLUtils {
                         }
 
                         // Write the buffer to the device side channel.  need to return immediately so we don't hang this write.
-                        amountWritten = deviceWriteInterface.write(0, TCPRequestContext.USE_CHANNEL_TIMEOUT);
+                        // Update the amount of bytes that have been written out in our internal instance.
+                        amountWritten += deviceWriteInterface.write(0, TCPRequestContext.USE_CHANNEL_TIMEOUT);
 
                         if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
                             Tr.event(tc, "bytes written: " + amountWritten);
@@ -176,14 +178,13 @@ public class SSLUtils {
                             break;
                         }
 
-                        if (amountToYield > -1 && amountToYield <= loopCounter) {
-                            // don't hold up stopping the channel if the custom property is set and the
-                            // designated count has been reached.
+                        if (configuredTimeoutValue > -1 && timeoutTimestamp <= System.currentTimeMillis()) {
+                            // don't hold up stopping the channel if the custom property is not set to indefinite and the
+                            // designated timeout point has been reached.
                             break;
                         }
 
-                        else if (amountToYield > -1 && amountWritten == 0) {
-                            loopCounter++;
+                        else if (configuredTimeoutValue > -1 && amountWritten == 0) {
                             if (TraceComponent.isAnyTracingEnabled() && tc.isEventEnabled()) {
                                 Tr.event(tc, "Did not write anything, sleeping thread before trying again.");
                             }
@@ -199,6 +200,7 @@ public class SSLUtils {
                             // if we didn't write anything, don't hard loop, but let other threads run before trying again.
                             Thread.yield();
                         }
+
                     }
 
                     // after the sync write, clear the buffer in case there was a
@@ -215,9 +217,9 @@ public class SSLUtils {
                                      + " amountWritten: " + amountWritten + " stop0Called: " + xConnLink.getChannel().getstop0Called());
                     }
                     break; // out of while
-                } else if (amountToYield > -1 && amountToYield <= loopCounter) {
+                } else if (configuredTimeoutValue > -1 && timeoutTimestamp <= System.currentTimeMillis()) {
                     if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                        Tr.debug(tc, "Closing handshake write timeout amount in SSL Channel met. Slept " + loopCounter + " times. Quit now.");
+                        Tr.debug(tc, "Closing handshake write timeout amount in SSL Channel met. Quit now.");
                     }
                     break; //out of while
                 }
@@ -648,6 +650,9 @@ public class SSLUtils {
         TCPWriteRequestContext deviceWriteContext = connLink.getDeviceWriteInterface();
         JSSEHelper jsseHelper = connLink.getChannel().getJsseHelper();
 
+        // check to see if any ALPN negotiator is on the classpath; if so, and if this is the first time through this
+        // method for the current connection (not a callback), register the current engine and link
+
         int amountToWrite = 0;
         boolean firstPass = true;
         HandshakeStatus hsstatus = HandshakeStatus.NEED_WRAP;
@@ -948,7 +953,6 @@ public class SSLUtils {
             // Set result to null so that caller knows action will be taken asynchronously.
             result = null;
         }
-
         if (bTrace && tc.isEntryEnabled()) {
             Tr.exit(tc, "handleHandshake");
         }
@@ -1124,16 +1128,18 @@ public class SSLUtils {
      * @param config
      * @param host
      * @param port
+     * @param connLink
      * @return SSLEngine
      */
     public static SSLEngine getOutboundSSLEngine(SSLContext context,
-                                                 SSLLinkConfig config, String host, int port) {
+                                                 SSLLinkConfig config, String host, int port, SSLConnectionLink connLink) {
         // PK46069 - use engine that allows session id re-use
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.entry(tc, "getOutboundSSLEngine, host=" + host + ", port=" + port);
         }
         SSLEngine engine = context.createSSLEngine(host, port);
-        configureEngine(engine, FlowType.OUTBOUND, config);
+
+        configureEngine(engine, FlowType.OUTBOUND, config, connLink);
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.exit(tc, "getOutboundSSLEngine, hc=" + engine.hashCode());
         }
@@ -1146,15 +1152,17 @@ public class SSLUtils {
      * @param context used to build the engine
      * @param type to determine if connection is inbound or outbound
      * @param config SSL channel configuration
+     * @param connLink
      * @return SSLEngine
      */
-    public static SSLEngine getSSLEngine(SSLContext context, FlowType type, SSLLinkConfig config) {
+    public static SSLEngine getSSLEngine(SSLContext context, FlowType type, SSLLinkConfig config, SSLConnectionLink connLink) {
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.entry(tc, "getSSLEngine");
         }
         // Create a new SSL engine for this connection.
         SSLEngine engine = context.createSSLEngine();
-        configureEngine(engine, type, config);
+
+        configureEngine(engine, type, config, connLink);
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) {
             Tr.exit(tc, "getSSLEngine, hc=" + engine.hashCode());
         }
@@ -1167,8 +1175,9 @@ public class SSLUtils {
      * @param engine
      * @param type
      * @param config
+     * @param connLink
      */
-    private static void configureEngine(SSLEngine engine, FlowType type, SSLLinkConfig config) {
+    private static void configureEngine(SSLEngine engine, FlowType type, SSLLinkConfig config, SSLConnectionLink connLink) {
         // Update the engine with the latest config parameters.
         engine.setEnabledCipherSuites(config.getEnabledCipherSuites(engine));
 
@@ -1230,6 +1239,8 @@ public class SSLUtils {
             // Update engine with client side specific config parameters.
             engine.setUseClientMode(true);
         }
+
+        AlpnSupportUtils.registerAlpnSupport(connLink, engine);
 
         try {
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {

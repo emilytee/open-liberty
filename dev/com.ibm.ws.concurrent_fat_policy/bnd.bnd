@@ -15,7 +15,9 @@ src: \
 	fat/src,\
 	test-applications/concurrentpolicyfat/src
 
-test.project: true
+fat.project: true
+
+fat.minimum.java.level: 1.8
 
 -buildpath: \
 	com.ibm.websphere.javaee.annotation.1.1;version=latest,\

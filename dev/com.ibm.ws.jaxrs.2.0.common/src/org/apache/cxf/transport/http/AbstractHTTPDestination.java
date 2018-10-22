@@ -35,7 +35,6 @@ import java.util.logging.Level;
 
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletContext;
-import javax.servlet.ServletRequest;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.xml.namespace.QName;
@@ -87,8 +86,8 @@ import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 /**
  * Common base for HTTP Destination implementations.
  */
-public abstract class AbstractHTTPDestination 
-    extends AbstractMultiplexDestination 
+public abstract class AbstractHTTPDestination
+    extends AbstractMultiplexDestination
     implements Configurable, Assertor {
 
     public static final String HTTP_REQUEST = "HTTP.REQUEST";
@@ -123,7 +122,6 @@ public abstract class AbstractHTTPDestination
     protected boolean fixedParameterOrder;
     protected boolean multiplexWithAddress;
     protected CertConstraints certConstraints;
-    protected boolean isServlet3;
     protected boolean decodeBasicAuthWithIso8859;
     protected ContinuationProviderFactory cproviderFactory;
     protected boolean enableWebSocket;
@@ -134,8 +132,9 @@ public abstract class AbstractHTTPDestination
      * Constructor
      *
      * @param b the associated Bus
-     * @param ci the associated conduit initiator
+     * @param registry the destination registry
      * @param ei the endpoint info of the destination
+     * @param path the path
      * @param dp true for adding the default port if it is missing
      * @throws IOException
      */
@@ -149,12 +148,6 @@ public abstract class AbstractHTTPDestination
         this.bus = b;
         this.registry = registry;
         this.path = path;
-        try {
-            ServletRequest.class.getMethod("isAsyncSupported");
-            isServlet3 = true;
-        } catch (Throwable t) {
-            //servlet 2.5 or earlier, no async support
-        }
         decodeBasicAuthWithIso8859 = PropertyUtils.isTrue(bus.getProperty(DECODE_BASIC_AUTH_WITH_ISO8859));
 
         initConfig();
@@ -174,10 +167,14 @@ public abstract class AbstractHTTPDestination
             String authEncoded = creds.get(1);
             try {
                 byte[] authBytes = Base64Utility.decode(authEncoded);
-                
-                String authDecoded = decodeBasicAuthWithIso8859 
+
+                if (authBytes == null) {
+                    throw new Base64Exception(new Throwable("Invalid Base64 data."));
+                }
+
+                String authDecoded = decodeBasicAuthWithIso8859
                     ? new String(authBytes, StandardCharsets.ISO_8859_1) : new String(authBytes);
-                
+
                 int idx = authDecoded.indexOf(':');
                 String username = null;
                 String password = null;
@@ -190,7 +187,7 @@ public abstract class AbstractHTTPDestination
                     }
                 }
 
-                AuthorizationPolicy policy = sc.getUserPrincipal() == null 
+                AuthorizationPolicy policy = sc.getUserPrincipal() == null
                     ? new AuthorizationPolicy() : new PrincipalAuthorizationPolicy(sc);
                 policy.setUserName(username);
                 policy.setPassword(password);
@@ -291,6 +288,8 @@ public abstract class AbstractHTTPDestination
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                 Tr.debug(tc, "Finished servicing http request on thread: " + Thread.currentThread());
             }
+            //clean up address within threadlocal of EndPointInfo   Liberty#3669
+            endpointInfo.resetAddress();
         }
     }
 
@@ -435,10 +434,10 @@ public abstract class AbstractHTTPDestination
      */
     private static void propogateSecureSession(HttpServletRequest request,
                                                Message message) {
-        final String cipherSuite = 
+        final String cipherSuite =
             (String) request.getAttribute(SSL_CIPHER_SUITE_ATTRIBUTE);
         if (cipherSuite != null) {
-            final java.security.cert.Certificate[] certs = 
+            final java.security.cert.Certificate[] certs =
                 (java.security.cert.Certificate[]) request.getAttribute(SSL_PEER_CERT_CHAIN_ATTRIBUTE);
             message.put(TLSSessionInfo.class,
                         new TLSSessionInfo(cipherSuite,
@@ -475,12 +474,6 @@ public abstract class AbstractHTTPDestination
     }
 
     protected Message retrieveFromContinuation(HttpServletRequest req) {
-        if (!isServlet3) {
-            if (cproviderFactory != null) {
-                return cproviderFactory.retrieveFromContinuation(req);
-            }
-            return null;
-        }
         return retrieveFromServlet3Async(req);
     }
 
@@ -497,7 +490,7 @@ public abstract class AbstractHTTPDestination
                                      final HttpServletRequest req,
                                      final HttpServletResponse resp) {
         try {
-            if (isServlet3 && req.isAsyncSupported()) {
+            if (req.isAsyncSupported()) {
                 inMessage.put(ContinuationProvider.class.getName(),
                               new Servlet3ContinuationProvider(req, resp, inMessage));
             } else if (cproviderFactory != null) {
@@ -668,9 +661,9 @@ public abstract class AbstractHTTPDestination
         if (hasNoResponseContent(outMessage)) {
             response.setContentLength(0);
             response.flushBuffer();
-            response.getOutputStream().close();
+            closeResponseOutputStream(response);
         } else if (!getStream) {
-            response.getOutputStream().close();
+            closeResponseOutputStream(response);
         } else {
             responseStream = response.getOutputStream();
         }
@@ -679,6 +672,15 @@ public abstract class AbstractHTTPDestination
             outMessage.remove(HTTP_RESPONSE);
         }
         return responseStream;
+    }
+
+    @FFDCIgnore({ IllegalStateException.class })
+    private void closeResponseOutputStream(HttpServletResponse response) throws IOException {
+        try {
+            response.getOutputStream().close();
+        } catch (IllegalStateException ex) {
+            // response.getWriter() has already been called
+        }
     }
 
     private int getReponseCodeFromMessage(Message message) {

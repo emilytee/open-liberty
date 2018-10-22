@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2013 IBM Corporation and others.
+ * Copyright (c) 2011, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -10,14 +10,25 @@
  *******************************************************************************/
 package com.ibm.ws.jdbc;
 
+import java.sql.Driver;
+import java.sql.SQLException;
 import java.sql.SQLNonTransientException;
+import java.util.AbstractMap.SimpleEntry;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Dictionary;
 import java.util.HashMap;
 import java.util.Hashtable;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.ServiceLoader;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.logging.Level;
 
 import javax.sql.ConnectionPoolDataSource;
@@ -41,8 +52,8 @@ import com.ibm.ws.jca.cm.ConnectionManagerService;
 import com.ibm.ws.jca.cm.ConnectorService;
 import com.ibm.ws.jdbc.internal.DataSourceDef;
 import com.ibm.ws.jdbc.internal.JDBCDriverService;
+import com.ibm.ws.jdbc.internal.JDBCDrivers;
 import com.ibm.ws.jdbc.internal.PropertyService;
-import com.ibm.ws.kernel.service.util.PrivHelper;
 import com.ibm.ws.resource.ResourceFactory;
 import com.ibm.ws.resource.ResourceFactoryBuilder;
 import com.ibm.ws.rsadapter.AdapterUtil;
@@ -70,6 +81,13 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
      * Name of property used by config service to identify where the configuration of a component instance originates.
      */
     private static final String CONFIG_SOURCE = "config.source";
+
+    /**
+     * Interface names, including package, for supported data source types. 
+     */
+    private static final Collection<String> DS_INTERFACE_NAMES = Arrays.asList(XADataSource.class.getName(),
+                                                                               ConnectionPoolDataSource.class.getName(),
+                                                                               DataSource.class.getName());
 
     /**
      * Property value that indicates the configuration originated in a configuration file, such as server.xml,
@@ -195,13 +213,18 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
             if ((value = vendorProps.remove(name)) != null)
                 dsSvcProps.put(name, value);
 
-        BundleContext bundleContext = PrivHelper.getBundleContext(FrameworkUtil.getBundle(DataSourceResourceFactoryBuilder.class));
+        BundleContext bundleContext = DataSourceService.priv.getBundleContext(FrameworkUtil.getBundle(DataSourceResourceFactoryBuilder.class));
 
         // className
         String className = (String) vendorProps.remove(DataSourceDef.className.name());
 
+        // url should be used if properties like serverName/portNumber/databaseName are unspecified
+        String url = (String) vendorProps.remove(DataSourceDef.url.name());
+        if (vendorProps.containsKey(DataSourceDef.databaseName.name()) || vendorProps.containsKey(DataSourceDef.portNumber.name()))
+            url = null;
+
         // libraryRef - scan shared libraries from the application
-        updateWithLibraries(bundleContext, application, declaringApplication, className, driverProps, dsSvcProps);
+        className = updateWithLibraries(bundleContext, application, declaringApplication, className, url, driverProps, dsSvcProps);
 
         // initialPoolSize > 0 not supported
         value = vendorProps.remove(DataSourceDef.initialPoolSize.name());
@@ -215,11 +238,6 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
             int stmtCacheSize = maxPoolSize == null || maxPoolSize <= 0 ? 0 : ((Integer) value / maxPoolSize);
             dsSvcProps.put(DSConfig.STATEMENT_CACHE_SIZE, stmtCacheSize);
         }
-
-        // url should be used if properties like serverName/portNumber/databaseName are unspecified
-        String url = (String) vendorProps.remove(DataSourceDef.url.name());
-        if (vendorProps.containsKey(DataSourceDef.databaseName.name()) || vendorProps.containsKey(DataSourceDef.portNumber.name()))
-            url = null;
 
         // serverName defaults to "localhost" (unless it's Derby Embedded, which doesn't have serverName)
         if (!vendorProps.containsKey(DataSourceDef.serverName.name()))
@@ -243,7 +261,7 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
         ConfigurationAdmin configAdmin = null;
         try {
             String bundleLocation = bundleContext.getBundle().getLocation();
-            String jcaBundleLocation = PrivHelper.getBundleContext(FrameworkUtil.getBundle(ConnectorService.class)).getBundle().getLocation();
+            String jcaBundleLocation = DataSourceService.priv.getBundleContext(FrameworkUtil.getBundle(ConnectorService.class)).getBundle().getLocation();
 
             configAdmin = configAdminRef.getService();
 
@@ -323,7 +341,7 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
     public final boolean removeExistingConfigurations(String filter) throws Exception {
         final boolean trace = TraceComponent.isAnyTracingEnabled();
 
-        BundleContext bundleContext = PrivHelper.getBundleContext(FrameworkUtil.getBundle(DataSourceResourceFactoryBuilder.class));
+        BundleContext bundleContext = DataSourceService.priv.getBundleContext(FrameworkUtil.getBundle(DataSourceResourceFactoryBuilder.class));
         ConfigurationAdmin configAdmin = configAdminRef.getService();
         try {
             Configuration[] existingConfigurations = configAdmin.listConfigurations(filter);
@@ -392,17 +410,20 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
      * 
      * @param applicationName name of the application with the DataSourceDefinition. Is set to null when java:global is specified
      * @param declaringApplication name of the application with the DataSourceDefinition.
-     * @param className data source implementation class name, including package.
+     * @param className data source or driver implementation class name, including package. NULL means infer the implementation class.
+     * @param url URL with which the Driver will connect to the database. NULL if data source should be used instead of Driver.
      * @param driverProps properties for the jdbcDriver.
      * @param dsSvcProps properties for the dataSource.
-     * @throws Exception if an error occurs.
+     * @return the supplied className unless NULL, in which case the inferred class name is returned. 
+     * @throws Exception if an error occurs or unable to locate a library containing the data source class or unable to infer a data source/driver class.
      */
-    private final void updateWithLibraries(BundleContext bundleContext,
-                                           String applicationName,
-                                           String declaringApplication,
-                                           String className,
-                                           Hashtable<String, Object> driverProps,
-                                           Hashtable<String, Object> dsSvcProps) throws Exception {
+    private final String updateWithLibraries(BundleContext bundleContext,
+                                             String applicationName,
+                                             String declaringApplication,
+                                             String className,
+                                             String url,
+                                             Hashtable<String, Object> driverProps,
+                                             Hashtable<String, Object> dsSvcProps) throws Exception {
         final boolean trace = TraceComponent.isAnyTracingEnabled();
         if (trace && tc.isEntryEnabled())
             Tr.entry(tc, "updateWithLibraries", applicationName, className);
@@ -411,7 +432,7 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
 
         // Find the application
         Configuration[] classloaderConfigs = null;
-        ServiceReference<?>[] refs = PrivHelper.getServiceReferences(bundleContext,"com.ibm.wsspi.application.Application", FilterUtils.createPropertyFilter("name", declaringApplication));
+        ServiceReference<?>[] refs = DataSourceService.priv.getServiceReferences(bundleContext,"com.ibm.wsspi.application.Application", FilterUtils.createPropertyFilter("name", declaringApplication));
         if (refs != null && refs.length > 0) {
             ServiceReference<?> appRef = refs[0];
             String parentPid = (String) appRef.getProperty(Constants.SERVICE_PID);
@@ -448,7 +469,7 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
                     Object privateLibraryRef = classloaderProps.get("privateLibraryRef");
                     if (privateLibraryRef != null && privateLibraryRef instanceof String[])
                         for (String pid : (String[]) privateLibraryRef)
-                                libraryFilter.append(FilterUtils.createPropertyFilter(Constants.SERVICE_PID, pid));
+                            libraryFilter.append(FilterUtils.createPropertyFilter(Constants.SERVICE_PID, pid));
                 }
 
                 Object commonLibraryRef = classloaderProps.get("commonLibraryRef");
@@ -465,9 +486,9 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
         // Give commonLibraryRef higher priority than libraryRef by adding it first
         List<ServiceReference<Library>> libraryRefs = new LinkedList<ServiceReference<Library>>();
         if (commonLibraryFilter.length() > 3)
-            libraryRefs.addAll(PrivHelper.getServiceReferences(bundleContext,Library.class, commonLibraryFilter.toString()));
+            libraryRefs.addAll(DataSourceService.priv.getServiceReferences(bundleContext,Library.class, commonLibraryFilter.toString()));
         if (libraryFilter.length() > 3)
-            libraryRefs.addAll(PrivHelper.getServiceReferences(bundleContext,Library.class, libraryFilter.toString()));
+            libraryRefs.addAll(DataSourceService.priv.getServiceReferences(bundleContext,Library.class, libraryFilter.toString()));
         
         // If no commonLibraryRef or privateLibraryRef was specified, use the global shared lib
         if(libraryRefs.size() == 0){
@@ -477,16 +498,55 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
             globalLibFilter.append(FilterUtils.createPropertyFilter("service.factoryPid", "com.ibm.ws.classloading.sharedlibrary"));
             globalLibFilter.append(FilterUtils.createPropertyFilter("id", "global"));
             globalLibFilter.append(")");
-            Collection<ServiceReference<Library>> globalLib = PrivHelper.getServiceReferences(bundleContext, Library.class, globalLibFilter.toString());
+            Collection<ServiceReference<Library>> globalLib = DataSourceService.priv.getServiceReferences(bundleContext, Library.class, globalLibFilter.toString());
             libraryRefs.addAll(globalLib);
         }
-            
+
         if (trace && tc.isDebugEnabled())
             Tr.debug(tc, "libraries", libraryRefs.toArray());
 
+        // this structure is populated only if className and url properties are absent.
+        String[][] dsClassInfo = new String[JDBCDrivers.NUM_DATA_SOURCE_INTERFACES][2];
+        final int CLASS_NAME = 0, LIBRARY_PID = 1; // indices for the second dimension
+
+        // determine if we need to search for an implementation class, and if so, of which type(s)
+        int[] dsTypeSearchOrder;
+        Set<String> searchedLibraryFiles = new TreeSet<String>();
+        Set<String> searchedPackages;
+        
+        boolean hasImplClassName = className != null && className.length() > 0;
+        if (hasImplClassName) {
+            if (XADataSource.class.getName().equals(className)) {
+                dsTypeSearchOrder = new int[] { JDBCDrivers.XA_DATA_SOURCE };
+                searchedPackages = new TreeSet<String>();
+                hasImplClassName = false;
+            } else if (ConnectionPoolDataSource.class.getName().equals(className)) {
+                dsTypeSearchOrder = new int[] { JDBCDrivers.CONNECTION_POOL_DATA_SOURCE };
+                searchedPackages = new TreeSet<String>();
+                hasImplClassName = false;
+            } else if (DataSource.class.getName().equals(className)) {
+                dsTypeSearchOrder = new int[] { JDBCDrivers.DATA_SOURCE };
+                searchedPackages = new TreeSet<String>();
+                hasImplClassName = false;
+            } else if (Driver.class.getName().equals(className)) {
+                dsTypeSearchOrder = null;
+                searchedPackages = Collections.singleton("META-INF/services/java.sql.Driver");
+                hasImplClassName = false;
+            } else {
+                dsTypeSearchOrder = null; // if we know the impl class, there is no need to search for one
+                searchedPackages = null;
+            }
+        } else if (url == null) {
+            dsTypeSearchOrder = new int[] { JDBCDrivers.XA_DATA_SOURCE, JDBCDrivers.CONNECTION_POOL_DATA_SOURCE, JDBCDrivers.DATA_SOURCE };
+            searchedPackages = new TreeSet<String>();
+        } else { // assume java.sql.Driver due to presence of URL
+            dsTypeSearchOrder = null;
+            searchedPackages = Collections.singleton("META-INF/services/java.sql.Driver");
+        }
+
         // Determine which shared library can load className
         for (ServiceReference<Library> libraryRef : libraryRefs) {
-            Library library = PrivHelper.getService(bundleContext,libraryRef);
+            Library library = DataSourceService.priv.getService(bundleContext,libraryRef);
             try {
                 String libraryPid = (String) libraryRef.getProperty(Constants.SERVICE_PID);
                 if (library == null) {
@@ -495,25 +555,70 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
                 } else {
                     try {
                         ClassLoader loader = AdapterUtil.getClassLoaderWithPriv(library);
-                        Class<?> cl = PrivHelper.loadClass(loader, className);
-                        String type = XADataSource.class.isAssignableFrom(cl) ? XADataSource.class.getName()
-                                        : ConnectionPoolDataSource.class.isAssignableFrom(cl) ? ConnectionPoolDataSource.class.getName()
-                                                        : DataSource.class.getName();
-                        driverProps.put(JDBCDriverService.LIBRARY_REF, new String[] { libraryPid });
-                        driverProps.put(JDBCDriverService.TARGET_LIBRARY, FilterUtils.createPropertyFilter("service.pid", libraryPid));
-                        driverProps.put(type, className);
-                        dsSvcProps.put(DSConfig.TYPE, type);
-    
-                        if (trace && tc.isEntryEnabled())
-                            Tr.exit(tc, "updateWithLibraries", driverProps);
-                        return;
+
+                        String type = null;
+                        if (hasImplClassName) {
+                            Class<?> cl = DataSourceService.priv.loadClass(loader, className);
+                            type = XADataSource.class.isAssignableFrom(cl) ? XADataSource.class.getName()
+                                 : ConnectionPoolDataSource.class.isAssignableFrom(cl) ? ConnectionPoolDataSource.class.getName()
+                                 : DataSource.class.isAssignableFrom(cl) ? DataSource.class.getName()
+                                 : Driver.class.getName();
+                        } else {
+                            searchedLibraryFiles.addAll(JDBCDriverService.getClasspath(library, false));
+                            if (dsTypeSearchOrder == null) {
+                                type = Driver.class.getName();
+                                for (Iterator<Driver> it = ServiceLoader.load(Driver.class, loader).iterator(); it.hasNext(); ) {
+                                    Driver driver = it.next();
+                                    if (trace && tc.isDebugEnabled())
+                                        Tr.debug(this, tc, "trying driver", driver);
+                                    try {
+                                        if (driver.acceptsURL(url)) {
+                                            if (trace && tc.isDebugEnabled())
+                                                Tr.debug(this, tc, driver + " accepts " + PropertyService.filterURL(url));
+                                            className = driver.getClass().getName();
+                                            break;
+                                        } else {
+                                            if (trace && tc.isDebugEnabled())
+                                                Tr.debug(this, tc, driver + " does not accept " + PropertyService.filterURL(url));
+                                        }
+                                    } catch (SQLException x) {
+                                        if (trace && tc.isDebugEnabled())
+                                            Tr.debug(this, tc, driver + " does not accept " + PropertyService.filterURL(url), x);
+                                    }
+                                }
+                            } else {
+                                SimpleEntry<Integer, String> dsEntry = JDBCDrivers.inferDataSourceClassFromDriver(loader,
+                                                                                                                  searchedPackages,
+                                                                                                                  dsTypeSearchOrder);
+                                if (dsEntry != null) {
+                                    int dsType = dsEntry.getKey();
+                                    if (dsClassInfo[dsType][CLASS_NAME] == null) {
+                                        dsClassInfo[dsType][CLASS_NAME] = dsEntry.getValue();
+                                        dsClassInfo[dsType][LIBRARY_PID] = libraryPid;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (className != null && type != null) {
+                            driverProps.put(JDBCDriverService.LIBRARY_REF, new String[] { libraryPid });
+                            driverProps.put(JDBCDriverService.TARGET_LIBRARY, FilterUtils.createPropertyFilter("service.pid", libraryPid));
+                            driverProps.put(type, className);
+                            dsSvcProps.put(DSConfig.TYPE, type);
+
+                            if (trace && tc.isEntryEnabled())
+                                Tr.exit(tc, "updateWithLibraries", driverProps);
+                            return className;
+                        }
                     } catch (ClassNotFoundException x) {
                         if (trace && tc.isDebugEnabled())
                             Tr.debug(tc, className + " not found in", libraryPid);
+                        searchedLibraryFiles.addAll(JDBCDriverService.getClasspath(library, false));
                     } catch (Exception x) {
                         FFDCFilter.processException(x, DataSourceResourceFactoryBuilder.class.getName(), "444", new Object[] { libraryRef });
                         if (trace && tc.isDebugEnabled())
                             Tr.debug(tc, libraryRef.toString(), x);
+                        searchedLibraryFiles.addAll(JDBCDriverService.getClasspath(library, false));
                         // Continue to try other libraryRefs
                     }
                 }
@@ -522,10 +627,41 @@ public class DataSourceResourceFactoryBuilder implements ResourceFactoryBuilder 
             }
         }
 
-        // className couldn't be found in any of the shared libraries
-        SQLNonTransientException x = new SQLNonTransientException(ConnectorService.getMessage("MISSING_LIBRARY_J2CA8022", declaringApplication, className, DataSourceService.DATASOURCE,
-                                                                                              dsSvcProps.get(DataSourceService.JNDI_NAME)));
-        
+        // Inferred data source class name when className and url properties are absent 
+        for (int dsType : new int[] { JDBCDrivers.XA_DATA_SOURCE, JDBCDrivers.CONNECTION_POOL_DATA_SOURCE, JDBCDrivers.DATA_SOURCE })
+            if (dsClassInfo[dsType][CLASS_NAME] != null) {
+                String type = dsType == JDBCDrivers.XA_DATA_SOURCE ? XADataSource.class.getName()
+                            : dsType == JDBCDrivers.CONNECTION_POOL_DATA_SOURCE ? ConnectionPoolDataSource.class.getName()
+                            : DataSource.class.getName();
+                driverProps.put(JDBCDriverService.LIBRARY_REF, new String[] { dsClassInfo[dsType][LIBRARY_PID] });
+                driverProps.put(JDBCDriverService.TARGET_LIBRARY, FilterUtils.createPropertyFilter("service.pid", dsClassInfo[dsType][LIBRARY_PID]));
+                driverProps.put(type, dsClassInfo[dsType][CLASS_NAME]);
+                dsSvcProps.put(DSConfig.TYPE, type);
+
+                if (trace && tc.isEntryEnabled())
+                    Tr.exit(tc, "updateWithLibraries", driverProps);
+                return dsClassInfo[dsType][CLASS_NAME];
+            }
+
+        String message;
+        if (searchedPackages == null) {
+            // className couldn't be found in any of the shared libraries
+            message = ConnectorService.getMessage("MISSING_LIBRARY_J2CA8022", declaringApplication, className, DataSourceService.DATASOURCE,
+                                                  dsSvcProps.get(DataSourceService.JNDI_NAME));
+        } else {
+            List<String> types = dsTypeSearchOrder == null ? Collections.singletonList("java.sql.Driver"): new ArrayList<String>(dsTypeSearchOrder.length);
+            if (dsTypeSearchOrder != null)
+                for (int dsType : dsTypeSearchOrder)
+                    switch (dsType) {
+                        case JDBCDrivers.DATA_SOURCE: types.add("javax.sql.DataSource"); break;
+                        case JDBCDrivers.CONNECTION_POOL_DATA_SOURCE : types.add("javax.sql.ConnectionPoolDataSource"); break;
+                        case JDBCDrivers.XA_DATA_SOURCE : types.add("javax.sql.XADataSource"); break;
+                    }
+            message = AdapterUtil.getNLSMessage("DSRA4001.no.suitable.driver.nested", types, dsSvcProps.get(DataSourceService.JNDI_NAME),
+                                                searchedLibraryFiles, searchedPackages);
+        }
+        SQLNonTransientException x = new SQLNonTransientException(message);
+
         if (trace && tc.isEntryEnabled())
             Tr.exit(tc, "updateWithLibraries", x);
         throw x;

@@ -12,9 +12,11 @@ package com.ibm.jbatch.container.ws.impl;
 
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
+import java.util.logging.Logger;
 
 import javax.batch.operations.JobSecurityException;
 import javax.batch.operations.NoSuchJobExecutionException;
@@ -28,6 +30,7 @@ import org.osgi.service.component.annotations.ReferenceCardinality;
 import org.osgi.service.component.annotations.ReferencePolicy;
 import org.osgi.service.component.annotations.ReferencePolicyOption;
 
+import com.ibm.jbatch.container.exception.BatchIllegalJobStatusTransitionException;
 import com.ibm.jbatch.container.exception.ExecutionAssignedToServerException;
 import com.ibm.jbatch.container.persistence.jpa.JobInstanceEntity;
 import com.ibm.jbatch.container.services.IJPAQueryHelper;
@@ -41,12 +44,19 @@ import com.ibm.jbatch.container.ws.WSJobRepository;
 import com.ibm.jbatch.container.ws.WSRemotablePartitionExecution;
 import com.ibm.jbatch.container.ws.WSStepThreadExecutionAggregate;
 import com.ibm.jbatch.spi.BatchSecurityHelper;
+import com.ibm.websphere.ras.Tr;
+import com.ibm.websphere.ras.TraceComponent;
 
 /**
  * {@inheritDoc}
  */
 @Component(configurationPolicy = ConfigurationPolicy.IGNORE, property = { "service.vendor=IBM" })
 public class WSJobRepositoryImpl implements WSJobRepository {
+
+    private final static String CLASSNAME = WSJobRepositoryImpl.class.getName();
+    private final static Logger logger = Logger.getLogger(CLASSNAME);
+
+    private static final TraceComponent tc = Tr.register(WSJobRepositoryImpl.class);
 
     private IPersistenceManagerService persistenceManagerService;
 
@@ -126,30 +136,16 @@ public class WSJobRepositoryImpl implements WSJobRepository {
      * {@inheritDoc}
      */
     @Override
-    public List<WSJobInstance> getJobInstances(int page, int pageSize) {
-
-        //Return the whole list for an admin or monitor
-        if (authService == null || authService.isAdmin() || authService.isMonitor()) {
-            return new ArrayList<WSJobInstance>(persistenceManagerService.getJobInstances(page, pageSize));
-        } else if (authService.isSubmitter()) {
-            //filter based on current user if not admin or monitor
-            return new ArrayList<WSJobInstance>(persistenceManagerService.getJobInstances(page, pageSize, authService.getRunAsUser()));
-        }
-
-        throw new JobSecurityException("The current user " + batchSecurityHelper.getRunAsUser() + " is not authorized to perform any batch operations.");
-
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
     public List<WSJobInstance> getJobInstances(IJPAQueryHelper queryHelper, int page, int pageSize) throws NoSuchJobExecutionException, JobSecurityException {
 
         if (authService == null || authService.isAdmin() || authService.isMonitor()) {
             return new ArrayList<WSJobInstance>(persistenceManagerService.getJobInstances(queryHelper, page, pageSize));
+        } else if (authService.isGroupAdmin() || authService.isGroupMonitor()) {
+            queryHelper.setGroups(authService.getGroupsForSubject());
+            queryHelper.setQueryIssuer(authService.getRunAsUser());
+            return new ArrayList<WSJobInstance>(persistenceManagerService.getJobInstances(queryHelper, page, pageSize));
         } else if (authService.isSubmitter()) {
-            queryHelper.setAuthSubmitter(authService.getRunAsUser());
+            queryHelper.setQueryIssuer(authService.getRunAsUser());
             return new ArrayList<WSJobInstance>(persistenceManagerService.getJobInstances(queryHelper, page, pageSize));
         }
 
@@ -240,12 +236,22 @@ public class WSJobRepositoryImpl implements WSJobRepository {
 
     @Override
     public WSJobInstance updateJobInstanceState(long instanceId, InstanceState state) {
-        return (WSJobInstance) persistenceManagerService.updateJobInstanceWithInstanceState(instanceId, state, new Date());
+        return persistenceManagerService.updateJobInstanceWithInstanceState(instanceId, state, new Date());
     }
 
     @Override
-    public WSJobInstance updateJobInstanceStateUponRestart(long instanceId, InstanceState state) {
-        return (WSJobInstance) persistenceManagerService.updateJobInstanceWithInstanceStateUponRestart(instanceId, state, new Date());
+    public WSJobInstance updateJobInstanceStateOnRestart(long instanceId) {
+        return (WSJobInstance) persistenceManagerService.updateJobInstanceOnRestart(instanceId, new Date());
+    }
+
+    @Override
+    public WSJobInstance updateJobInstanceStateOnConsumed(long instanceId) throws BatchIllegalJobStatusTransitionException {
+        return (WSJobInstance) persistenceManagerService.updateJobInstanceStateOnConsumed(instanceId);
+    }
+
+    @Override
+    public WSJobInstance updateJobInstanceStateOnQueued(long instanceId) throws BatchIllegalJobStatusTransitionException {
+        return (WSJobInstance) persistenceManagerService.updateJobInstanceStateOnQueued(instanceId);
     }
 
     /**
@@ -347,10 +353,17 @@ public class WSJobRepositoryImpl implements WSJobRepository {
         return (WSJobExecution) persistenceManagerService.updateJobExecutionAndInstanceOnStatusChange(jobExecutionId, status, date);
     }
 
+    // DELETE ME - rename to better name
     @Override
     public WSJobExecution updateJobExecutionAndInstanceNotSetToServerYet(
                                                                          long jobExecutionId, Date date) throws ExecutionAssignedToServerException {
-        return (WSJobExecution) persistenceManagerService.updateJobExecutionAndInstanceNotSetToServerYet(jobExecutionId, date);
+        return updateJobExecutionAndInstanceOnStopBeforeServerAssigned(jobExecutionId, date);
+    }
+
+    @Override
+    public WSJobExecution updateJobExecutionAndInstanceOnStopBeforeServerAssigned(
+                                                                                  long jobExecutionId, Date date) throws ExecutionAssignedToServerException {
+        return (WSJobExecution) persistenceManagerService.updateJobExecutionAndInstanceOnStopBeforeServerAssigned(jobExecutionId, date);
     }
 
     @Override
@@ -384,4 +397,24 @@ public class WSJobRepositoryImpl implements WSJobRepository {
     public int getJobInstanceTableVersion() throws Exception {
         return persistenceManagerService.getJobInstanceTableVersion();
     }
+
+    @Override
+    public WSJobInstance updateJobInstanceWithGroupNames(long jobInstanceId, Set<String> groupNames) {
+
+        if (authService == null) {
+            //issue a new message indicating security is not available
+            // no auth service (ie security feature not present, so cannot perform group security
+            Tr.warning(tc, "BATCH_SECURITY_NOT_ACTIVE", jobInstanceId);
+
+            // no groups should be persisted - pass in an empty set
+            return persistenceManagerService.updateJobInstanceWithGroupNames(jobInstanceId, new HashSet<String>());
+        } else {
+            Set<String> normalizedNames = new HashSet<String>();
+
+            normalizedNames = authService.normalizeGroupNames(groupNames);
+
+            return persistenceManagerService.updateJobInstanceWithGroupNames(jobInstanceId, normalizedNames);
+        }
+    }
+
 }

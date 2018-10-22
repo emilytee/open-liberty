@@ -18,15 +18,16 @@ import org.junit.Test;
 
 import com.ibm.ws.microprofile.config.TestUtils;
 import com.ibm.ws.microprofile.config.interfaces.WebSphereConfig;
+import com.ibm.ws.microprofile.test.AbstractConfigTest;
 
-public class SourcedValueTest {
+public class SourcedValueTest extends AbstractConfigTest {
 
     @Test
     public void testSourceValues() {
-        HashMapConfigSource source100 = new HashMapConfigSource(100, "Basic Source 100");
-        HashMapConfigSource source200 = new HashMapConfigSource(200, "Basic Source 200");
-        HashMapConfigSource source300 = new HashMapConfigSource(300, "Basic Source 300");
-        HashMapConfigSource source400 = new HashMapConfigSource(400, "Basic Source 400");
+        BasicConfigSource source100 = new BasicConfigSource(100, "Basic Source 100");
+        BasicConfigSource source200 = new BasicConfigSource(200, "Basic Source 200");
+        BasicConfigSource source300 = new BasicConfigSource(300, "Basic Source 300");
+        BasicConfigSource source400 = new BasicConfigSource(400, "Basic Source 400");
 
         source100.put("key1", "value1 (100)");
         source100.put("key2", "value2 (100)");
@@ -55,10 +56,10 @@ public class SourcedValueTest {
 
     @Test
     public void testDump() {
-        HashMapConfigSource source100 = new HashMapConfigSource(100, "Basic Source 100");
-        HashMapConfigSource source200 = new HashMapConfigSource(200, "Basic Source 200");
-        HashMapConfigSource source300 = new HashMapConfigSource(300, "Basic Source 300");
-        HashMapConfigSource source400 = new HashMapConfigSource(400, "Basic Source 400");
+        BasicConfigSource source100 = new BasicConfigSource(100, "Basic Source 100");
+        BasicConfigSource source200 = new BasicConfigSource(200, "Basic Source 200");
+        BasicConfigSource source300 = new BasicConfigSource(300, "Basic Source 300");
+        BasicConfigSource source400 = new BasicConfigSource(400, "Basic Source 400");
 
         source100.put("key1", "value1 (100)");
         source100.put("key2", "value2 (100)");
@@ -80,6 +81,13 @@ public class SourcedValueTest {
         WebSphereConfig config = (WebSphereConfig) builder.build();
 
         String dump = config.dump();
-        assertEquals("[key1=value1 (100)(Basic Source 100),key2=value2 (200)(Basic Source 200),key3=value3 (300)(Basic Source 300),key4=value4 (400)(Basic Source 400)]", dump);
+
+        String expected = "[Basic Source 100; class java.lang.String] key1=value1 (100)\n" +
+                          "[Basic Source 200; class java.lang.String] key2=value2 (200)\n" +
+                          "[Basic Source 300; class java.lang.String] key3=value3 (300)\n" +
+                          "[Basic Source 400; class java.lang.String] key4=value4 (400)";
+
+        assertEquals(expected, dump);
+
     }
 }

@@ -28,6 +28,7 @@ import java.sql.Statement;
 import java.util.ConcurrentModificationException;
 import java.util.Enumeration;
 import java.util.Hashtable;
+import java.util.Map;
 import java.util.logging.Level;
 
 import javax.sql.DataSource;
@@ -44,7 +45,6 @@ import com.ibm.ws.session.SessionManagerConfig;
 import com.ibm.ws.session.SessionStatistics;
 import com.ibm.ws.session.store.common.BackedHashMap;
 import com.ibm.ws.session.store.common.BackedSession;
-import com.ibm.ws.session.store.common.LoggingUtil;
 import com.ibm.ws.threadContext.ComponentMetaDataAccessorImpl;
 import com.ibm.wsspi.resource.ResourceConfig;
 import com.ibm.wsspi.session.IStore;
@@ -68,6 +68,9 @@ public class DatabaseHashMap extends BackedHashMap {
     String dbpwd;
     private transient DatabaseStoreService databaseStoreService;
 
+    // this is set to true for multirow in DatabaseHashMapMR if additional conditions are satisfied
+    boolean appDataTablesPerThread = false;
+
     //  PK71265
     String delPropall;
 
@@ -76,6 +79,9 @@ public class DatabaseHashMap extends BackedHashMap {
     boolean tryingToInitialize = false;
     //PK55900 : make sure tableName is only constructed once in initDBSettings()
     boolean firstInitialize = true;
+
+    IStore _iStore;
+    SessionManagerConfig _smc;
 
     static final int SOMEBIGSIZE = 2100000; // Used for missing DataSource
     static final int SMALLCOL_SIZE_DB2 = 3122;
@@ -227,12 +233,23 @@ public class DatabaseHashMap extends BackedHashMap {
     public DatabaseHashMap(IStore store, SessionManagerConfig smc, DatabaseStoreService databaseStoreService) {
         super(store, smc);
         this.databaseStoreService = databaseStoreService;
+        _iStore = store;
+        _smc = smc;
         if (smc.getTableNameValue() != null) {
             tableName = smc.getTableNameValue();
         }
         suspendedTransactions = new Hashtable();
         getDataSource();
         initDBSettings();
+    }
+
+    /*
+     * getAppDataTablesPerThread - returns the boolean
+     * only true for mulitrow db if other conditions are met - see constructor for DatabaseHashMapMR
+     */
+    @Override
+    public boolean getAppDataTablesPerThread() {
+        return appDataTablesPerThread;
     }
 
     protected DatabaseStoreService getDatabaseStoreService() {
@@ -1732,7 +1749,10 @@ public class DatabaseHashMap extends BackedHashMap {
      */
     protected int overQualLastAccessTimeUpdate(BackedSession sess, long nowTime) {
         if (com.ibm.websphere.ras.TraceComponent.isAnyTracingEnabled() && LoggingUtil.SESSION_LOGGER_WAS.isLoggable(Level.FINE)) {
-            LoggingUtil.SESSION_LOGGER_WAS.entering(methodClassName, methodNames[OVERQUAL_LAST_ACCESS_TIME_UPDATE]);
+            StringBuffer sb = new StringBuffer(" lastAccessTime= ");
+            sb.append(sess.getCurrentAccessTime());
+            sb.append("; nowTime= ").append(nowTime);
+            LoggingUtil.SESSION_LOGGER_WAS.entering(methodClassName, methodNames[OVERQUAL_LAST_ACCESS_TIME_UPDATE], sb);
         }
         Connection con = null;
         PreparedStatement s = null;
@@ -2371,7 +2391,7 @@ public class DatabaseHashMap extends BackedHashMap {
         byte[] objbuf = null;
 
         try {
-            Hashtable ht = null;
+            Map<Object, Object> ht = null;
             if (com.ibm.websphere.ras.TraceComponent.isAnyTracingEnabled() && LoggingUtil.SESSION_LOGGER_WAS.isLoggable(Level.FINE)) {
                 LoggingUtil.SESSION_LOGGER_WAS.logp(Level.FINE, methodClassName, methodNames[SERIALIZE_APP_DATA], "get swappableData and convert to byte array");
             }
@@ -2986,12 +3006,6 @@ public class DatabaseHashMap extends BackedHashMap {
                 // only invalidate those which have not been accessed since
                 // check in computeInvalidList
                 if (rc > 0) {
-
-                    // set this flag so that removal from the database is not
-                    // done as part of the sessoin.invalidate call -
-                    // we want to do it here with the nukerCon
-                    s.nukedByInvalidator = true;
-
                     // return of session done as a result of this call
                     s.internalInvalidate(true);
 

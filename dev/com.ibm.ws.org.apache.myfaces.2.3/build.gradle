@@ -9,41 +9,41 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 
- // Global vars
- def downloadSrcDir = "${projectDir}/build/source"
+plugins {
+  id "net.ossindex.audit" version "0.3.8-beta"
+}
 
- task copySource {
-    doLast {
-        println "downloadSrcDir: downloadSrcDir"
-        configurations {
-            sourceJar
-        }
+audit {
+    failOnError = true
+}
 
-        dependencies {
-            sourceJar 'com.ibm.ws.org.apache.myfaces.core:myfaces-impl:2.3.0-20170928-014425-256:sources'
-        }
+// Local vars
+File downloadSrcDir = project.file('build/source')
 
-        // Copy the dependencies to the com.ibm.ws.org.apache.myfaces.2.3/build/source directory
-        copy {
-            // Creating source directory
-            mkdir(downloadSrcDir)
+configurations {
+    sourceJar
+}
 
-            // Adding jar to "source"
-            from configurations.sourceJar
-            into downloadSrcDir
-        }
-    }
- }
+dependencies {
+    sourceJar 'org.apache.myfaces.core:myfaces-impl:2.3.2:sources'
+}
 
- task deleteJars(type:Delete) {
-    println "deleteJars task, deleting " + downloadSrcDir
-    delete(downloadSrcDir)
- }
+task copySource(type: Copy) {
+    from configurations.sourceJar
+    into downloadSrcDir
+}
 
- assemble {
+assemble {
     dependsOn copySource
- }
+}
 
- clean {
+task deleteJars(type:Delete) {
+    doLast {
+        println "deleteJars task, deleting " + downloadSrcDir
+        file(downloadSrcDir).deleteDir()
+    }
+}
+
+clean {
     dependsOn deleteJars
- }
+}

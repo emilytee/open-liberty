@@ -13,6 +13,7 @@ package com.ibm.ws.messaging.security.internal;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Dictionary;
 import java.util.HashSet;
 import java.util.Hashtable;
@@ -23,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import javax.security.auth.Subject;
 
+import org.osgi.framework.BundleContext;
 import org.osgi.service.cm.Configuration;
 import org.osgi.service.cm.ConfigurationAdmin;
 import org.osgi.service.cm.ConfigurationEvent;
@@ -104,6 +106,8 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
 
     private final RuntimeSecurityService runtimeSecurityService = RuntimeSecurityService.SINGLETON_INSTANCE;
 
+    private String bundleLocation;
+
     /**
      * Method to activate Messaging Security component
      * 
@@ -111,11 +115,12 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
      * @throws MessagingSecurityException
      */
     @Activate
-    protected void activate(Map<String, Object> properties) {
+    protected void activate(BundleContext ctx, Map<String, Object> properties) {
 
         SibTr.entry(tc, CLASS_NAME + "activate", properties);
 
         this.properties = properties;
+        this.bundleLocation = ctx.getBundle().getLocation();
         populateDestinationPermissions();
         runtimeSecurityService.modifyMessagingServices(this);
 
@@ -160,7 +165,8 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
         temporaryDestinationPermissions = null;
         sibAuthenticationService = null;
         sibAuthorizationService = null;
-
+        this.bundleLocation = null;
+        
         SibTr.exit(tc, CLASS_NAME + "deactivate");
     }
 
@@ -352,8 +358,11 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
             }
         }
         if (tc.isDebugEnabled()) {
+            SibTr.debug(tc, CLASS_NAME + " ***** Queue Permissions *****");
             printDestinationPermissions(queuePermissions);
+            SibTr.debug(tc, CLASS_NAME + " ***** Topic Permissions *****");
             printDestinationPermissions(topicPermissions);
+            SibTr.debug(tc, CLASS_NAME + " ***** Temporary DestinationPermissions *****");
             printDestinationPermissions(temporaryDestinationPermissions);
         }
 
@@ -595,7 +604,7 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
         Configuration config = null;
         try {
             pids.add(input);
-            config = configAdmin.getConfiguration(input);
+            config = configAdmin.getConfiguration(input, bundleLocation);
         } catch (IOException e) {
             MessagingSecurityException mse = new MessagingSecurityException(e);
             FFDCFilter.processException(mse, CLASS_NAME + ".getDictionaryObject", "1008", this);
@@ -615,7 +624,7 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
     private void printDestinationPermissions(Map<String, ?> destinationPermissions) {
         Set<String> destinations = destinationPermissions.keySet();
         for (String destination : destinations) {
-            SibTr.debug(tc, "Destination: " + destination);
+            SibTr.debug(tc, CLASS_NAME + " Destination: " + destination);
             Permission permission = (Permission) destinationPermissions.get(destination);
             SibTr.debug(tc, "  Users having permissions!!!");
             Map<String, Set<String>> userRoles = permission.getRoleToUserMap();
@@ -631,6 +640,80 @@ public class MessagingSecurityServiceImpl implements MessagingSecurityService, C
                 SibTr.debug(tc, "    " + role + ": " + groupRoles.get(role));
             }
         }
+    }
+    
+    /**
+     * Get the Destination Roles, it will be used for audit
+     */
+    public String[] getDestinationRoles(Map<String, ?> destinationPermissions, String dest, String user) {
+        SibTr.debug(tc,  " dest: " + dest + " user: " + user);
+        if (user.startsWith("cn=")) {
+            user = user.substring(3, user.indexOf(","));
+            SibTr.debug(tc, CLASS_NAME + " user truncated to: " + user);
+        }
+        ArrayList<String> roleList = new ArrayList();
+        int element = 0;
+        Set<String> destinations = destinationPermissions.keySet();
+        
+        if (dest.indexOf("/") != -1) {
+            dest = dest.substring(0,  dest.indexOf("/"));
+        }
+
+        for (String destination : destinations) {
+            SibTr.debug(tc, CLASS_NAME + " Destination: " + destination + " dest: " + dest);
+            if (destination.equals(dest)) {
+                Permission permission = (Permission) destinationPermissions.get(destination);
+                Map<String, Set<String>> userRoles = permission.getRoleToUserMap();
+                Set<String> uRoles = userRoles.keySet();
+                for (String role : uRoles) {
+                    SibTr.debug(tc, CLASS_NAME + " role: " + role);
+                    SibTr.debug(tc, CLASS_NAME + "    users: " + userRoles.get(role));
+                    Set<String> rs = userRoles.get(role);
+                    for (String r : rs) {
+                        SibTr.debug(tc, CLASS_NAME + "     user: " + r);
+                        if (r.equals(user)) {
+                            roleList.add(role);
+                        }
+                     }
+                }
+                
+                Map<String, Set<String>> groupRoles = permission.getRoleToGroupMap();
+                Set<String> gRoles = groupRoles.keySet();
+                for (String role : gRoles) {
+                    SibTr.debug(tc, CLASS_NAME + " role: " + role);
+                    SibTr.debug(tc, CLASS_NAME + "    groups: " + groupRoles.get(role));
+                   
+                    Set <String> rs = groupRoles.get(role);
+                    
+                    if (rs != null) {
+                        List<String> groups = MessagingSecurityUtility
+                                        .getGroupsAssociatedToUser(user,
+                                                                   this);
+                        if (groups != null) {
+                            for (String g : groups) {
+                                if (rs.contains(g)) {
+                                    if (!roleList.contains(role)) {
+                                        roleList.add(role);
+                                    }
+                                }
+                            }
+                        }
+                       
+                    }
+                }                
+                               
+            }
+        }
+        if (roleList != null)
+            SibTr.debug(tc,  CLASS_NAME + " roles: " + roleList.toArray().toString());
+        else 
+            SibTr.debug(tc, CLASS_NAME + " no roles identified for user " + user);
+        
+        Object[] roleListAsObjectArray = roleList.toArray();
+        String[] roleListAsStrArray = Arrays.copyOf(roleListAsObjectArray, roleListAsObjectArray.length, String[].class);
+        
+        SibTr.exit(tc, CLASS_NAME);
+        return (roleListAsStrArray);
     }
 
     /*

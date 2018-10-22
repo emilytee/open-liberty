@@ -21,6 +21,7 @@ import javax.batch.operations.NoSuchJobExecutionException;
 import javax.batch.operations.NoSuchJobInstanceException;
 import javax.batch.runtime.BatchStatus;
 
+import com.ibm.jbatch.container.exception.BatchIllegalJobStatusTransitionException;
 import com.ibm.jbatch.container.exception.ExecutionAssignedToServerException;
 import com.ibm.jbatch.container.services.IJPAQueryHelper;
 
@@ -131,14 +132,6 @@ public interface WSJobRepository {
 
     public abstract WSStepThreadExecutionAggregate getStepExecutionAggregate(long topLevelStepExecutionId) throws IllegalArgumentException, JobSecurityException;
 
-    /**
-     * @param page the page of rows to get (starts at 0)
-     * @param pageSize the number of rows in a page
-     *
-     * @return the list of job instances (top-level job instances only)
-     */
-    public abstract List<WSJobInstance> getJobInstances(int page, int pageSize);
-
 //	public abstract void updateJobExecutionLogDir(long workUnitInternalExecutionId, String logDirPath);
 
     /**
@@ -165,12 +158,25 @@ public interface WSJobRepository {
     public abstract WSJobInstance updateJobInstanceState(long instanceId, InstanceState state);
 
     /**
-     * Update the instanceState of this job instance if state is currently STOPPED or FAILED
+     * Update the instanceState to SUBMITTED for this job instance if state is currently STOPPED or FAILED
      *
      * @param instanceId
-     * @param state
      */
-    public abstract WSJobInstance updateJobInstanceStateUponRestart(long instanceId, InstanceState state);
+    public abstract WSJobInstance updateJobInstanceStateOnRestart(long instanceId);
+
+    /**
+     * Update the instanceState to JMS_CONSUMED if it's a valid status transition
+     *
+     * @param instanceId
+     */
+    public abstract WSJobInstance updateJobInstanceStateOnConsumed(long instanceId) throws BatchIllegalJobStatusTransitionException;
+
+    /**
+     * Update the instanceState to JMS_QUEUED if it's a valid status transition
+     *
+     * @param instanceId
+     */
+    public abstract WSJobInstance updateJobInstanceStateOnQueued(long instanceId) throws BatchIllegalJobStatusTransitionException;
 
     /**
      * Update the instanceState and batch status of this job instance
@@ -194,6 +200,9 @@ public interface WSJobRepository {
     public abstract WSJobInstance updateJobInstanceAndExecutionWithInstanceStateAndBatchStatus(long instanceId, long executionId, final InstanceState state,
                                                                                                final BatchStatus batchStatus);
 
+    // DELETE once no longer used
+    WSJobExecution updateJobExecutionAndInstanceNotSetToServerYet(long jobExecutionId, Date date) throws ExecutionAssignedToServerException;
+
     /**
      * Update the batch status of this job execution and instance
      *
@@ -202,7 +211,7 @@ public interface WSJobRepository {
      * @return
      * @throws ExecutionAssignedToServerException
      */
-    WSJobExecution updateJobExecutionAndInstanceNotSetToServerYet(long jobExecutionId, Date date) throws ExecutionAssignedToServerException;
+    WSJobExecution updateJobExecutionAndInstanceOnStopBeforeServerAssigned(long jobExecutionId, Date date) throws ExecutionAssignedToServerException;
 
     /**
      * Update the batch status of this job execution and instance
@@ -281,5 +290,7 @@ public interface WSJobRepository {
      * Check the version of the job instance table in the job repository.
      */
     int getJobInstanceTableVersion() throws Exception;
+
+    public WSJobInstance updateJobInstanceWithGroupNames(long jobInstanceId, Set<String> groupNames);
 
 }

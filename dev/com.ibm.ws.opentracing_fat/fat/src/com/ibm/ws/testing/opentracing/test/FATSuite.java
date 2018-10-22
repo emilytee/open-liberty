@@ -16,35 +16,41 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Suite;
 import org.junit.runners.Suite.SuiteClasses;
 
+import componenttest.topology.impl.LibertyServer;
+import componenttest.topology.impl.LibertyServerFactory;
+
 /**
  * <p>The open tracing FAT suite.</p>
  *
  * <p>This class *must* be named "FATSuite", since the test code is hard coded
  * to look for just that class.</p>
- *
- * <p>See the file "open-liberty/dev/com.ibm.ws.opentracing_fat/generated/autoFVT/src/ant/launch.xml",
- * which has property "filesToFind" coded to "FATSuiteLite.class;FATSuite.class;FATTest.class".</p>
  */
 @RunWith(Suite.class)
 @SuiteClasses({
     TestSpanUtils.class,
-    FATOpentracing.class
+    FATOpentracing.class,
+    FATOpentracingHelloWorld.class,
+    FATMPOpenTracing.class,
+    OpentracingTCKLauncher.class,
+    MicroProfile13NoTracer.class
 })
 public class FATSuite implements FATOpentracingConstants {
-    // Logging ...
-
     private static final Class<? extends FATSuite> CLASS = FATSuite.class;
+    
+    private static final String FEATURE_NAME = "com.ibm.ws.opentracing.mock-0.30.mf";
+    private static final String BUNDLE_NAME = "com.ibm.ws.opentracing.mock.jar";
 
     private static void info(String methodName, String text) {
         FATLogging.info(CLASS, methodName, text);
     }
 
-    //
-
     @BeforeClass
     public static void setUp() throws Exception {
         String methodName = "setUp";
         info(methodName, "ENTER / RETURN");
+        LibertyServer server = LibertyServerFactory.getLibertyServer(OPENTRACING_FAT_SERVER1_NAME);
+        server.copyFileToLibertyInstallRoot("usr/extension/lib/features/", "features/" + FEATURE_NAME);
+        server.copyFileToLibertyInstallRoot("usr/extension/lib/", "bundles/" + BUNDLE_NAME);
     }
 
     @AfterClass

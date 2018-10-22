@@ -391,11 +391,17 @@ public interface ConfigConstants {
     String CONFIG_PROP_DEREFALIASES = "derefAlias";
     String CONFIG_PROP_SSL_CONFIGURATION = "sslConfiguration";
     String CONFIG_PROP_CONNECTION_POOL = "connectionPool";
+
     /**
      * Define how long will LDAP adapter aborts the connection attempt if the connection cannot be established.
-     * Unit is second. By default, this timeout period is the network (TCP) timeout value, which is in the order of a few minutes.
      */
     String CONFIG_PROP_CONNECT_TIMEOUT = "connectTimeout";
+
+    /**
+     * Define how long will LDAP adapter aborts the read attempt if the connection cannot be established.
+     */
+    String CONFIG_PROP_READ_TIMEOUT = "readTimeout";
+
     /**
      * Define whether or not write operations are allowed on secondary servers.
      * default value is false.
@@ -431,7 +437,6 @@ public interface ConfigConstants {
     String CONFIG_PROP_CACHE_SIZE = "size";
     String CONFIG_PROP_CACHE_TIME_OUT = "timeout";
     String CONFIG_PROP_ATTRIBUTE_SIZE_LIMIT = "sizeLimit";
-    String CONFIG_PROP_SERVER_TTL_ATTRIBUTE = "serverTTLAttribute";
     String CONFIG_PROP_CACHE_DIST_POLICY = "cacheDistPolicy";
 
     String CONFIG_DO_SEARCH_RESULTS_CACHE = "searchResultsCache";
@@ -469,14 +474,16 @@ public interface ConfigConstants {
     String CONFIG_PROP_SEARCHFILTER = "searchFilter";
     String CONFIG_PROP_TRANSLATE_RDN = "translateRDN";
     String CONFIG_PROP_CERTIFICATE_MAP_MODE = "certificateMapMode";
-    // String CONFIG_VALUE_EXTACT_DN_MODE = "exactDNMode";
     String CONFIG_VALUE_EXTACT_DN_MODE = "EXACT_DN";
-    // String CONFIG_VALUE_FILTER_DESCRIPTOR_MODE = "filterDescriptorMode";
     String CONFIG_VALUE_FILTER_DESCRIPTOR_MODE = "CERTIFICATE_FILTER";
+    String CONFIG_VALUE_CUSTOM_MODE = "CUSTOM";
+    String CONFIG_VALUE_CERT_NOT_SUPPORTED_MODE = "NOT_SUPPORTED";
     String[] CONFIG_PROP_CERTIFICATE_MAP_MODE_VALUES = {
-                                                         CONFIG_VALUE_EXTACT_DN_MODE, CONFIG_VALUE_FILTER_DESCRIPTOR_MODE
+                                                         CONFIG_VALUE_EXTACT_DN_MODE, CONFIG_VALUE_FILTER_DESCRIPTOR_MODE, CONFIG_VALUE_CUSTOM_MODE,
+                                                         CONFIG_VALUE_CERT_NOT_SUPPORTED_MODE
     };
     String CONFIG_PROP_CERTIFICATE_FILTER = "certificateFilter";
+    String CONFIG_PROP_CERTIFICATE_MAPPER_ID = "certificateMapperId";
     /**
      * The name of the property "readOnly" in the vmm configuration
      */

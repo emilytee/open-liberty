@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2017 IBM Corporation and others.
+ * Copyright (c) 1997, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -16,9 +16,12 @@ import com.ibm.ws.http.channel.h2internal.Constants;
 import com.ibm.ws.http.channel.h2internal.FrameReadProcessor;
 import com.ibm.ws.http.channel.h2internal.FrameTypes;
 import com.ibm.ws.http.channel.h2internal.H2ConnectionSettings;
+import com.ibm.ws.http.channel.h2internal.exceptions.CompressionException;
 import com.ibm.ws.http.channel.h2internal.exceptions.FrameSizeException;
+import com.ibm.ws.http.channel.h2internal.exceptions.Http2Exception;
 import com.ibm.ws.http.channel.h2internal.exceptions.ProtocolException;
 import com.ibm.ws.http.channel.h2internal.huffman.HuffmanEncoder;
+import com.ibm.wsspi.bytebuffer.WsByteBuffer;
 
 public class FrameHeaders extends Frame {
 
@@ -69,26 +72,6 @@ public class FrameHeaders extends Frame {
     }
 
     /**
-     * Read frame constructor for pushed headers
-     */
-    public FrameHeaders(int streamId, byte[] headerBlockFragment) {
-        super(streamId, 0, (byte) 0x00, false, FrameDirection.READ);
-        frameType = FrameTypes.HEADERS;
-
-        if (headerBlockFragment != null) {
-            payloadLength += headerBlockFragment.length;
-        }
-        this.headerBlockFragment = headerBlockFragment;
-
-        this.END_STREAM_FLAG = false;
-        this.END_HEADERS_FLAG = true;
-
-        frameType = FrameTypes.HEADERS;
-        setInitialized();
-
-    }
-
-    /**
      * Write frame constructor
      */
     public FrameHeaders(int streamId, byte[] headerBlockFragment, int streamDependency, int paddingLength, int weight,
@@ -117,6 +100,7 @@ public class FrameHeaders extends Frame {
         this.weight = weight;
 
         frameType = FrameTypes.HEADERS;
+        writeFrameLength += payloadLength;
         setInitialized();
     }
 
@@ -132,8 +116,8 @@ public class FrameHeaders extends Frame {
         this.END_HEADERS_FLAG = endHeaders;
         this.exclusive = false;
         this.weight = 0;
-
         frameType = FrameTypes.HEADERS;
+        writeFrameLength += payloadLength;
         setInitialized();
     }
 
@@ -152,13 +136,13 @@ public class FrameHeaders extends Frame {
         // +---------------------------------------------------------------+
 
         setFlags();
-        int payloadIndex = 0;
+        int payloadIndex = 0; // iterator to keep track of current position
 
         if (PADDED_FLAG) {
-            // The padded field is present; set the paddedLength to represent the actual size of the data we want
+            // The padded field is present; set the paddingLength to represent the actual size of the data we want
             paddingLength = frp.grabNextByte();
             payloadLength -= paddingLength;
-            payloadIndex += 1;
+            payloadIndex += 1; // Pad Length is one byte
         }
 
         if (PRIORITY_FLAG) {
@@ -170,28 +154,34 @@ public class FrameHeaders extends Frame {
             firstPayloadByte = (byte) (firstPayloadByte & Constants.MASK_7F);
             this.streamDependency = frp.grabNext24BitInt(firstPayloadByte);
             this.weight = frp.grabNextByte();
-            payloadIndex += 4;
+            payloadIndex += 5; // stream dependency + weight = 5 bytes
         }
 
         // subtract the current position from the total payload length
-        payloadLength -= payloadIndex;
+        int headerBlockLength = payloadLength - payloadIndex;
 
-        this.headerBlockFragment = new byte[payloadLength];
+        this.headerBlockFragment = new byte[headerBlockLength];
 
-        // copy over the payload data
-        for (int i = payloadIndex; i < payloadIndex + payloadLength; i++)
-            headerBlockFragment[i] = frp.grabNextByte();
+        // reset the payloadIndex and copy over the header data
+        for (payloadIndex = 0; payloadIndex < headerBlockLength; payloadIndex++)
+            headerBlockFragment[payloadIndex] = frp.grabNextByte();
 
         // read any padding data (and ignore it)
-        for (int i = payloadIndex; i < payloadIndex + paddingLength; i++)
+        for (; payloadIndex < headerBlockLength + paddingLength; payloadIndex++)
             frp.grabNextByte();
 
         setInitialized();
     }
 
     @Override
-    public byte[] buildFrameForWrite() {
-        byte[] frame = super.buildFrameForWrite();
+    public WsByteBuffer buildFrameForWrite() {
+        WsByteBuffer buffer = super.buildFrameForWrite();
+        byte[] frame;
+        if (buffer.hasArray()) {
+            frame = buffer.array();
+        } else {
+            frame = super.createFrameArray();
+        }
 
         // add the first 9 bytes of the array
         setFrameHeaders(frame, utils.FRAME_TYPE_HEADERS);
@@ -224,7 +214,9 @@ public class FrameHeaders extends Frame {
             frame[frameIndex] = 0x00;
             frameIndex++;
         }
-        return frame;
+        buffer.put(frame, 0, writeFrameLength);
+        buffer.flip();
+        return buffer;
     }
 
     public byte[] getHeaderBlockFragment() {
@@ -236,15 +228,21 @@ public class FrameHeaders extends Frame {
     }
 
     @Override
-    public void validate(H2ConnectionSettings settings) throws ProtocolException, FrameSizeException {
+    public void validate(H2ConnectionSettings settings) throws Http2Exception {
         if (streamId == 0) {
             throw new ProtocolException("HEADERS frame streamID cannot be 0x0");
-        }
-        if (this.getPayloadLength() > settings.maxFrameSize) {
+        } else if (this.getPayloadLength() <= 0) {
+            throw new CompressionException("HEADERS frame must have a header block fragment");
+        } else if (this.getPayloadLength() > settings.getMaxFrameSize()) {
             throw new FrameSizeException("HEADERS payload greater than allowed by the max frame size");
-        }
-        if (this.paddingLength >= this.payloadLength) {
+        } else if (this.paddingLength >= this.payloadLength) {
             throw new ProtocolException("HEADERS padding length must be less than the length of the payload");
+        } else if (this.streamId == this.streamDependency) {
+            ProtocolException pe = new ProtocolException("HEADERS frame stream cannot depend on itself");
+            pe.setConnectionError(false);
+            throw pe;
+        } else if (this.paddingLength < 0) {
+            throw new ProtocolException("HEADERS padding length is invalid");
         }
     }
 
@@ -485,5 +483,4 @@ public class FrameHeaders extends Frame {
 
         return frameToString.toString();
     }
-
 }

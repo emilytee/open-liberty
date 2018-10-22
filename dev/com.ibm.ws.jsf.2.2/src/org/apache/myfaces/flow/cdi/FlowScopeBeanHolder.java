@@ -46,6 +46,7 @@ import org.apache.myfaces.context.ReleaseableExternalContext;
 import org.apache.myfaces.context.servlet.StartupFacesContextImpl;
 import org.apache.myfaces.context.servlet.StartupServletExternalContextImpl;
 import org.apache.myfaces.flow.FlowReference;
+import org.apache.myfaces.flow.util.FlowUtils;
 import org.apache.myfaces.shared.config.MyfacesConfig;
 import org.apache.myfaces.shared.context.ExceptionHandlerImpl;
 
@@ -304,26 +305,13 @@ public class FlowScopeBeanHolder implements Serializable
         }
     }
     
+
     public String getFlowMapKey(FacesContext facesContext, FlowReference flowReference)
     {
-        Flow flow = null;
-        if (flowReference.getDocumentId() == null)
-        {
-            flow = facesContext.getApplication().getFlowHandler().getFlow(
-                facesContext, "", flowReference.getId());
-        }
-        else
-        {
-            flow = facesContext.getApplication().getFlowHandler().getFlow(
-                facesContext, flowReference.getDocumentId(), flowReference.getId());
-        }
-        if (flow != null)
-        {
-            return flow.getClientWindowFlowId(facesContext.getExternalContext().getClientWindow());
-        }
+        // no-op: needed to maintain serializability with pre-18.0.0.1 servers
         return null;
-    }
-
+    } 
+    
     public void createCurrentFlowScope(FacesContext facesContext)
     {
         ClientWindow cw = facesContext.getExternalContext().getClientWindow();
@@ -331,8 +319,7 @@ public class FlowScopeBeanHolder implements Serializable
         
         FlowHandler flowHandler = facesContext.getApplication().getFlowHandler();
         Flow flow = flowHandler.getCurrentFlow(facesContext);
-        String flowMapKey = flow.getClientWindowFlowId(
-            facesContext.getExternalContext().getClientWindow());
+        String flowMapKey = FlowUtils.getFlowMapKey(facesContext, flow);
 
         List<String> activeFlowKeys = activeFlowMapKeys.get(baseKey);
         if (activeFlowKeys == null)
@@ -352,8 +339,7 @@ public class FlowScopeBeanHolder implements Serializable
         
         FlowHandler flowHandler = facesContext.getApplication().getFlowHandler();
         Flow flow = flowHandler.getCurrentFlow(facesContext);
-        String flowMapKey = flow.getClientWindowFlowId(
-            facesContext.getExternalContext().getClientWindow());
+        String flowMapKey = FlowUtils.getFlowMapKey(facesContext, flow);
 
         ContextualStorage contextualStorage = storageMap.remove(flowMapKey);
         if (contextualStorage != null)

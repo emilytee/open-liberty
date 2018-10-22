@@ -40,7 +40,7 @@ import com.ibm.ws.microprofile.faulttolerance.test.util.TestTask;
 /**
  *
  */
-public class BulkheadTest {
+public class BulkheadTest extends AbstractFTTest {
 
     @Test
     public void testBulkhead() throws InterruptedException, ExecutionException, TimeoutException {
@@ -279,6 +279,14 @@ public class BulkheadTest {
             }
         }
 
+    }
+
+    @Test
+    public void testAsyncBulkheadDefaults() throws InterruptedException, ExecutionException, TimeoutException {
+        BulkheadPolicy bulkhead = FaultToleranceProvider.newBulkheadPolicy();
+
+        assertEquals(10, bulkhead.getMaxThreads());
+        assertEquals(10, bulkhead.getQueueSize());
     }
 
 }

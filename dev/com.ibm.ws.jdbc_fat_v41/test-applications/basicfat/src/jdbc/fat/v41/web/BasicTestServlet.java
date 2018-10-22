@@ -15,9 +15,13 @@ import static com.ibm.websphere.simplicity.config.DataSourceProperties.INFORMIX_
 import static com.ibm.websphere.simplicity.config.DataSourceProperties.MICROSOFT_SQLSERVER;
 import static com.ibm.websphere.simplicity.config.DataSourceProperties.SYBASE;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -33,6 +37,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 
 import javax.annotation.Resource;
 import javax.annotation.Resource.AuthenticationType;
@@ -45,6 +50,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.sql.DataSource;
 import javax.transaction.RollbackException;
+import javax.transaction.Status;
 import javax.transaction.UserTransaction;
 
 import org.junit.Test;
@@ -63,10 +69,10 @@ public class BasicTestServlet extends FATDatabaseServlet {
     private static final String MBEAN_TYPE = "com.ibm.ws.jca.cm.mbean.ConnectionManagerMBean";
     private static final String colorTable = "JDBC_FAT_v41_COLORS";
     private static final String userTable = "JDBC_FAT_v41_USERS";
+    private static final long TIMEOUT_NS = TimeUnit.MINUTES.toNanos(2);
     private List<String> globalSchemaList = null;
     private boolean isGetColorRegistered = false;
     private boolean isGetUserRegistered = false;
-    public static MBeanServer mbeanServer = ManagementFactory.getPlatformMBeanServer();
 
     @Resource
     private UserTransaction tran;
@@ -1113,7 +1119,7 @@ public class BasicTestServlet extends FATDatabaseServlet {
 
     // Ensure that we preserve the behavior that DatabaseMetaData.supportsRefCursors always returns false prior to jdbc-4.1 feature
     @Test
-    @MinimumJavaLevel(javaLevel = 1.8) // supportsRefCursor only available in Java 8 or higher
+    @MinimumJavaLevel(javaLevel = 8) // supportsRefCursor only available in Java 8 or higher
     public void testSupportsRefCursors() throws Exception {
         Connection con = xads.getConnection();
         try {
@@ -1141,10 +1147,14 @@ public class BasicTestServlet extends FATDatabaseServlet {
         stmt.execute("select * from " + colorTable);
         stmt.close();
 
-        System.out.println("About to wait for 5s");
-        Thread.sleep(5 * 1000);
+        System.out.println("Wait up to 2 minutes for transaction to be marked for rollback");
+        for (long start = System.nanoTime(); //
+                        tran.getStatus() != Status.STATUS_MARKED_ROLLBACK && System.nanoTime() - start < TIMEOUT_NS; //
+                        TimeUnit.MILLISECONDS.sleep(200))
+            System.out.println("Transaction status: " + tran.getStatus());
+
         // Connection should now be aborted due to timeout
-        System.out.println("Done waiting for 5s");
+        System.out.println("Done waiting");
 
         try {
             tran.commit();
@@ -1169,7 +1179,7 @@ public class BasicTestServlet extends FATDatabaseServlet {
 
     // Ensure that we preserve the behavior that DatabaseMetaData.getMaxLogicalLobSize always returns 0 prior to jdbc-4.2 feature
     @Test
-    @MinimumJavaLevel(javaLevel = 1.8) // getMaxLogicalLobSize only available in Java 8 or higher
+    @MinimumJavaLevel(javaLevel = 8) // getMaxLogicalLobSize only available in Java 8 or higher
     public void testGetMaxLogicalLobSize() throws Exception {
         Connection con = xads.getConnection();
         try {
@@ -1387,5 +1397,76 @@ public class BasicTestServlet extends FATDatabaseServlet {
         System.out.println("   " + contents.replace("\n", "\n   "));
 
         return Integer.parseInt((String) mbs.getAttribute(bean.getObjectName(), "size"));
+    }
+
+    /**
+     * Invocation handler that delegates all operations to the specified instance.
+     */
+    private static class DelegatingInvocationHandler implements InvocationHandler {
+        private final Object instance;
+
+        private DelegatingInvocationHandler(Object instance) {
+            this.instance = instance;
+        }
+
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            return method.invoke(instance, args);
+        }
+    }
+
+    /**
+     * Ensure it is possible to proxy the list of interfaces implemented by the Liberty JDBC connection,
+     * database meta data, statements, and result set classes.
+     */
+    @Test
+    public void testProxyForLibertyJDBCProxies() throws Exception {
+        Connection con = xads.getConnection();
+        try {
+            Connection conProxy = (Connection) Proxy.newProxyInstance(Thread.currentThread().getContextClassLoader(),
+                                                                      con.getClass().getInterfaces(),
+                                                                      new DelegatingInvocationHandler(con));
+            PreparedStatement ps = conProxy.prepareStatement("insert into " + colorTable + " values(?,?)");
+            PreparedStatement psProxy = (PreparedStatement) Proxy.newProxyInstance(Thread.currentThread().getContextClassLoader(),
+                                                                                   ps.getClass().getInterfaces(),
+                                                                                   new DelegatingInvocationHandler(ps));
+            psProxy.setInt(1, 7);
+            psProxy.setString(2, "orange");
+            assertEquals(1, psProxy.executeUpdate());
+            psProxy.close();
+
+            ResultSet rs = con.createStatement().executeQuery("select color from " + colorTable + " where id=7");
+            ResultSet rsProxy = (ResultSet) Proxy.newProxyInstance(Thread.currentThread().getContextClassLoader(),
+                                                                   rs.getClass().getInterfaces(),
+                                                                   new DelegatingInvocationHandler(rs));
+            assertTrue(rsProxy.next());
+            assertEquals("orange", rsProxy.getString(1));
+            Statement s = rsProxy.getStatement();
+            rsProxy.close();
+            s.close();
+
+            DatabaseMetaData mdata = conProxy.getMetaData();
+            DatabaseMetaData mdataProxy = (DatabaseMetaData) Proxy.newProxyInstance(Thread.currentThread().getContextClassLoader(),
+                                                                                    mdata.getClass().getInterfaces(),
+                                                                                    new DelegatingInvocationHandler(mdata));
+
+            CallableStatement cs = mdataProxy.getConnection().prepareCall("update " + colorTable + " set id=? where id=?");
+            CallableStatement csProxy = (CallableStatement) Proxy.newProxyInstance(Thread.currentThread().getContextClassLoader(),
+                                                                                   cs.getClass().getInterfaces(),
+                                                                                   new DelegatingInvocationHandler(cs));
+            csProxy.setInt(1, 8);
+            csProxy.setInt(2, 7);
+            assertEquals(1, csProxy.executeUpdate());
+            csProxy.close();
+
+            s = conProxy.createStatement();
+            Statement sProxy = (Statement) Proxy.newProxyInstance(Thread.currentThread().getContextClassLoader(),
+                                                                  s.getClass().getInterfaces(),
+                                                                  new DelegatingInvocationHandler(s));
+            assertEquals(1, sProxy.executeUpdate("delete from " + colorTable + " where id=8"));
+            sProxy.close();
+        } finally {
+            con.close();
+        }
     }
 }

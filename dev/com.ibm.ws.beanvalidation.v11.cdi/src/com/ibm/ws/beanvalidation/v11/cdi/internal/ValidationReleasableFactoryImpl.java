@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2014, 2017 IBM Corporation and others.
+ * Copyright (c) 2014, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -95,19 +95,17 @@ public class ValidationReleasableFactoryImpl implements ValidationReleasableFact
     }
 
     private <T> ManagedObjectFactory<T> getManagedBeanManagedObjectFactory(Class<T> clazz) {
+        ManagedObjectFactory<T> factory = null;
         ModuleMetaData mmd = ComponentMetaDataAccessorImpl.getComponentMetaDataAccessor().getComponentMetaData().getModuleMetaData();
         ManagedObjectService managedObjectService = managedObjectServiceRef.getService();
         if (managedObjectService != null) {
             try {
-                ManagedObjectFactory<T> factory = managedObjectService.createManagedObjectFactory(mmd, clazz, true);
-                if (factory.isManaged()) {
-                    return factory;
-                }
+                factory = managedObjectService.createManagedObjectFactory(mmd, clazz, true);
             } catch (ManagedObjectException e) {
                 // ffdc
             }
         }
-        return null;
+        return factory;
     }
 
     @Activate
@@ -143,22 +141,12 @@ public class ValidationReleasableFactoryImpl implements ValidationReleasableFact
         managedObjectServiceRef.unsetReference(ref);
     }
 
-    /*
-     * (non-Javadoc)
-     *
-     * @see com.ibm.ws.container.service.metadata.ComponentMetaDataListener#componentMetaDataCreated(com.ibm.ws.container.service.metadata.MetaDataEvent)
-     */
     @Override
     public void componentMetaDataCreated(MetaDataEvent<ComponentMetaData> event) {
         // no-op
 
     }
 
-    /*
-     * (non-Javadoc)
-     *
-     * @see com.ibm.ws.container.service.metadata.ComponentMetaDataListener#componentMetaDataDestroyed(com.ibm.ws.container.service.metadata.MetaDataEvent)
-     */
     @Override
     public void componentMetaDataDestroyed(MetaDataEvent<ComponentMetaData> event) {
         BeanManager beanManager = beanManagers.remove(event.getMetaData());

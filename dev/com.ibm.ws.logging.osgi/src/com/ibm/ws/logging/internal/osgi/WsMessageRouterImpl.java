@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2016 IBM Corporation and others.
+ * Copyright (c) 2012, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -10,6 +10,7 @@
  *******************************************************************************/
 package com.ibm.ws.logging.internal.osgi;
 
+import java.util.HashSet;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -62,7 +63,12 @@ public class WsMessageRouterImpl extends MessageRouterImpl implements WsMessageR
      */
     @Override
     public void setEarlierMessages(Queue<RoutedMessage> earlierMessages) {
-        this.earlierMessages = earlierMessages;
+        RERWLOCK.writeLock().lock();
+        try {
+        	this.earlierMessages = earlierMessages;
+        } finally {
+        	RERWLOCK.writeLock().unlock();
+        }
     }
 
     /**
@@ -115,7 +121,8 @@ public class WsMessageRouterImpl extends MessageRouterImpl implements WsMessageR
 
         }
     }
-
+    
+    
     /**
      * Remove the LogHandler ref.
      */
@@ -160,14 +167,29 @@ public class WsMessageRouterImpl extends MessageRouterImpl implements WsMessageR
                 routeToAll(routedMessage, routeAllMsgsToTheseLogHandlers);
             }
             Set<String> logHandlerIds = getLogHandlersForMessage(routedMessage.getFormattedMsg());
-
             if (logHandlerIds == null) {
                 // There are no routing requirements for this msgId.
                 // Return true to tell the caller to log the msg normally.
                 return true;
             } else {
-                // Route to all LogHandlers in the wsLogHandlerService ConcurrentMap.
-                return routeToAll(routedMessage, logHandlerIds);
+                // Ensure console doesn't duplicate printing specific message that included in wtoMessages=*
+            		if(routeAllMsgsToTheseLogHandlers != null) {
+            			if(!logHandlerIds.equals(routeAllMsgsToTheseLogHandlers)) {
+	            			Set<String> tempLogHandlerIds = new HashSet<String>();
+	            			
+	            			for(String id : logHandlerIds) {
+	            				if(id.equals("DEFAULT") || id.equals("-DEFAULT") || id.equals("+DEFAULT") || !routeAllMsgsToTheseLogHandlers.contains(id)) {
+	            					tempLogHandlerIds.add(id);
+	            				}
+	            			}
+	            			return routeToAll(routedMessage, tempLogHandlerIds);
+            			}else {
+            				return true;
+            			}
+            		}else {
+                        // Route to all LogHandlers in the wsLogHandlerService ConcurrentMap.
+                        return routeToAll(routedMessage, logHandlerIds);
+            		}
             }
         } finally {
             RERWLOCK.readLock().unlock();

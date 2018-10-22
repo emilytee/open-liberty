@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2006 IBM Corporation and others.
+ * Copyright (c) 1997, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -25,9 +25,13 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import com.ibm.websphere.servlet.error.ServletErrorReport;
+import com.ibm.websphere.servlet.request.extended.IRequestExtended;
 import com.ibm.ws.webcontainer.osgi.interceptor.RegisterRequestInterceptor;
+import com.ibm.ws.webcontainer.servlet.H2Handler;
 import com.ibm.ws.webcontainer.servlet.WsocHandler;
+import com.ibm.ws.webcontainer.srt.SRTServletRequest;
 import com.ibm.ws.webcontainer.webapp.WebApp;
+import com.ibm.wsspi.http.HttpInboundConnection;
 import com.ibm.wsspi.webcontainer.RequestProcessor;
 import com.ibm.wsspi.webcontainer.logging.LoggerFactory;
 import com.ibm.wsspi.webcontainer.util.ServletUtil;
@@ -133,17 +137,48 @@ protected static final Logger logger = LoggerFactory.getInstance().getLogger("co
         if (requestProcessor != null) {
             HttpServletRequest httpRequest = (HttpServletRequest) ServletUtil.unwrapRequest(request, HttpServletRequest.class);
             HttpServletResponse httpResponse = (HttpServletResponse) ServletUtil.unwrapResponse(response, HttpServletResponse.class);
-            if (!RegisterRequestInterceptor.notifyRequestInterceptors("AfterFilters",httpRequest,httpResponse)){
+            if (!RegisterRequestInterceptor.notifyRequestInterceptors("AfterFilters", httpRequest, httpResponse)){
+                boolean handled = false;
                 WsocHandler wsocHandler = ((com.ibm.ws.webcontainer.osgi.webapp.WebApp) webapp).getWebSocketHandler();
+                H2Handler h2Handler = ((com.ibm.ws.webcontainer.osgi.webapp.WebApp) webapp).getH2Handler();
+
+                // Should WebSocket handle this request?
                 if (wsocHandler != null) {
-                    //Should WebSocket handle this request?
                     if (wsocHandler.isWsocRequest(request)) {
                         wsocHandler.handleRequest(httpRequest, httpResponse);
-                    } else {
-                        requestProcessor.handleRequest(request, response);
+                        handled = true;
                     }
                 }
-                else {
+                
+                // Should this be handled as an h2c upgrade request?
+                if (!handled) {
+                    if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+                        logger.logp(Level.FINE, CLASS_NAME, "invokeTarget", " looking at H2 upgrade");
+                    }
+                    HttpInboundConnection httpInboundConnection = null;
+                    if (request instanceof SRTServletRequest) {
+                        SRTServletRequest srtReq = (SRTServletRequest)request;
+                        IRequestExtended iReq = (IRequestExtended)srtReq.getIRequest();
+                        if (iReq != null) {
+                            httpInboundConnection = iReq.getHttpInboundConnection();
+                            logger.logp(Level.FINE, CLASS_NAME, "invokeTarget", "HttpInboundConnection: " + httpInboundConnection);
+                        }
+                    }
+
+                    if (h2Handler != null && httpInboundConnection != null && request instanceof HttpServletRequest) {
+                        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+                            logger.logp(Level.FINE, CLASS_NAME, "invokeTarget", "looking at isH2Request");
+                        }
+                        if (h2Handler.isH2Request(httpInboundConnection, request)) {
+                            if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+                                logger.logp(Level.FINE, CLASS_NAME, "invokeTarget", "upgrading to H2");
+                            }
+                            h2Handler.handleRequest(httpInboundConnection, httpRequest, httpResponse);
+                        }
+                    }
+                    if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINE)) {
+                        logger.logp(Level.FINE, CLASS_NAME, "invokeTarget", "calling requestProcessor.handleRequest");
+                    }
                     requestProcessor.handleRequest(request, response);
                 }
             }

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2003, 2015 IBM Corporation and others.
+ * Copyright (c) 2003, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -13,6 +13,7 @@ package com.ibm.ws.ejbcontainer.timer.persistent.osgi.internal;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.Date;
+import java.util.GregorianCalendar;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -147,6 +148,18 @@ class PersistentTimerTaskHandlerImpl extends PersistentTimerTaskHandler implemen
             nextTimeout = parsedSchedule.getNextTimeout(lastExecution.getTime());
         } else {
             nextTimeout = parsedSchedule.getFirstTimeout();
+
+            // A timer would never be scheduled if getFirstTimeout() had originally returned
+            // -1, therefore the first (and only) timeout has passed while creating the timer.
+            // In this scenario, run the timer immediately by returning the creation time.
+            if (nextTimeout == -1) {
+                //Need to shave off milliseconds from timerCreationTime
+                GregorianCalendar cal = new GregorianCalendar();
+                cal.setTime(timerCreationTime);
+                cal.set(GregorianCalendar.MILLISECOND, 0);
+                cal.add(GregorianCalendar.SECOND, 1);
+                return cal.getTime();
+            }
         }
         if (nextTimeout == -1) {
             return null;

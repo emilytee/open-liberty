@@ -22,6 +22,8 @@ import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.eclipse.microprofile.config.spi.ConfigProviderResolver;
 
+import com.ibm.websphere.ras.annotation.Trivial;
+
 /**
  * This CDI Bean controls the creation and destruction of Config instances injected by CDI.
  * They are all Dependent scope.
@@ -47,24 +49,26 @@ public class ConfigBean extends AbstractConfigBean<Config> implements Bean<Confi
     /** {@inheritDoc} */
     @Override
     public void destroy(Config config, CreationalContext<Config> creationalContext) {
-        ConfigProviderResolver.instance().releaseConfig(config);
         creationalContext.release();
     }
 
     /** {@inheritDoc} */
     @Override
+    @Trivial
     public Class<?> getBeanClass() {
         return Config.class;
     }
 
     /** {@inheritDoc} */
     @Override
+    @Trivial
     public boolean isNullable() {
         return false;
     }
 
     /** {@inheritDoc} */
     @Override
+    @Trivial
     public Class<? extends Annotation> getScope() {
         return RequestScoped.class;
     }

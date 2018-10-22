@@ -16,13 +16,11 @@ Bundle-SymbolicName: com.ibm.ws.rest.handler
 Bundle-Description: Project for REST handler; version=${bVersion}
 
 Web-ContextPath: ibm/api
+OL-VirtualHost: ${admin.virtual.host}
 
 IBM-Authorization-Roles: com.ibm.ws.management
 IBM-Web-Extension-Processing-Disabled: true
 
-Import-Package: \
-    org.apache.commons.fileupload*;version=1.2.1;packageType="was_internal", \
-    *
   
 Private-Package: \
   com.ibm.ws.rest.handler.internal, \
@@ -47,7 +45,7 @@ instrument.classesExcludes: com/ibm/ws/rest/handler/internal/resources/*.class
 
 -buildpath: \
 	com.ibm.websphere.javaee.servlet.3.0;version=latest,\
-	com.ibm.ws.org.apache.commons.fileupload.1.2.1;version=latest,\
+	com.ibm.ws.org.apache.commons.fileupload;version=latest,\
 	com.ibm.websphere.rest.handler;version=latest,\
 	com.ibm.websphere.org.osgi.core,\
 	com.ibm.websphere.org.osgi.service.component,\
@@ -65,9 +63,9 @@ instrument.classesExcludes: com/ibm/ws/rest/handler/internal/resources/*.class
 	org.jmock:jmock-junit4;strategy=exact;version=2.5.1, \
 	org.jmock:jmock;strategy=exact;version=2.5.1, \
 	../build.sharedResources/lib/junit/old/junit.jar;version=file, \
-	../build.sharedResources/lib/ws-junit/ws-junit.jar;version=file, \
+	com.ibm.ws.junit.extensions;version=latest, \
 	com.ibm.ws.org.objenesis:objenesis;version=1.0, \
-	cglib:cglib-nodep;version=2.1.0.3, \
+	cglib:cglib-nodep;version=3.2.7, \
 	org.jmock:jmock-legacy;version=2.5.0, \
 	com.ibm.ws.kernel.boot;version=latest, \
 	com.ibm.json4j;version=latest

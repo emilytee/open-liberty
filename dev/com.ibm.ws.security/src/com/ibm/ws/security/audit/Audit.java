@@ -10,10 +10,14 @@
  *******************************************************************************/
 package com.ibm.ws.security.audit;
 
+import com.ibm.websphere.ras.annotation.Trivial;
+
 /**
  * This class provides an audit probe point method and constants.
  */
+@Trivial
 public class Audit {
+    @Trivial
     public static enum EventID {
         SECURITY_AUTHN_01,
         SECURITY_AUTHZ_01, // web
@@ -31,7 +35,12 @@ public class Audit {
         SECURITY_MEMBER_MGMT_01,
         SECURITY_JMS_AUTHN_01,
         SECURITY_JMS_AUTHZ_01,
-        SECURITY_JMS_AUTHN_TERMINATE_01
+        SECURITY_JMS_AUTHN_TERMINATE_01,
+        SECURITY_JMS_CLOSED_CONNECTION_01,
+        JMX_NOTIFICATION_01,
+        JMX_MBEAN_01,
+        JMX_MBEAN_ATTRIBUTES_01,
+        JMX_MBEAN_REGISTER_01
 
     }
 
@@ -50,5 +59,6 @@ public class Audit {
      * @param params -
      *            The objects needed to produce the audit record.
      */
+    @Trivial
     public static void audit(EventID eventId, Object... params) {}
 }

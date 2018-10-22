@@ -27,6 +27,7 @@ import javax.security.auth.x500.X500Principal;
 import com.ibm.ejs.ras.TraceNLS;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.websphere.security.auth.WSLoginFailedException;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.security.AccessIdUtil;
 import com.ibm.ws.security.authentication.AuthenticationException;
@@ -52,11 +53,12 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
     private static final TraceComponent tc = Tr.register(CertificateLoginModule.class, TraceConstants.TRACE_GROUP, TraceConstants.MESSAGE_BUNDLE);
     private String username = null;
     private String authenticatedId = null;
+    private String securityName = null;
     private boolean collectiveCert = false;
 
     /**
      * Gets the required Callback objects needed by this login module.
-     * 
+     *
      * @param callbackHandler
      * @return
      * @throws IOException
@@ -73,7 +75,7 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
 
     /** {@inheritDoc} */
     @Override
-    @FFDCIgnore({ RegistryException.class, CertificateMapFailedException.class, LoginException.class })
+    @FFDCIgnore({ RegistryException.class, CertificateMapFailedException.class, WSLoginFailedException.class, LoginException.class })
     public boolean login() throws LoginException {
         if (isAlreadyProcessed()) {
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
@@ -101,8 +103,7 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
             collectiveCert = plugin.isCollectiveCertificateChain(certChain);
             if (collectiveCert || plugin.isCollectiveCACertificate(certChain)) {
                 handleCollectiveLogin(certChain, plugin, collectiveCert);
-            }
-            else {
+            } else {
                 CertificateAuthenticator certAuthen = getCertificateAuthenticator(certChain);
                 if (certAuthen != null) {
                     handleCertificateAuthenticator(certChain, certAuthen);
@@ -138,6 +139,8 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
                 Tr.debug(tc, "CLIENT-CERT Authentication failed for the client certificate with dn " + dn + ". The dn did not map to a user in the registry.");
             }
             throw new AuthenticationException(msg, e);
+        } catch (WSLoginFailedException e) {
+            throw new AuthenticationException(e.getLocalizedMessage());
         } catch (LoginException e) {
             // Need to re-throw LoginException
             throw e;
@@ -156,7 +159,7 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
                                                       "JAAS_AUTHENTICATION_FAILED_CERT_INTERNAL_ERROR",
                                                       new Object[] { dn, e },
                                                       "CWWKS1102E: CLIENT-CERT Authentication failed for the client certificate with dn " + dn + ". An internal error occurred: "
-                                                                      + e.getLocalizedMessage());
+                                                                              + e.getLocalizedMessage());
             if (TraceComponent.isAnyTracingEnabled() && tc.isErrorEnabled()) {
                 Tr.error(tc, "JAAS_AUTHENTICATION_FAILED_CERT_INTERNAL_ERROR", dn, e.getLocalizedMessage());
             }
@@ -167,13 +170,12 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
     /**
      * Get the accessid components (type, realm, username) from the
      * CertificateAuthenticator and create the Principal and credentials
-     * 
+     *
      * @param certChain
      * @param bob
      */
     private void handleCertificateAuthenticator(X509Certificate[] certChain,
-                                                CertificateAuthenticator certAuthen)
-                    throws Exception {
+                                                CertificateAuthenticator certAuthen) throws Exception {
         String type = certAuthen.getType();
         if (type == null)
             type = AccessIdUtil.TYPE_USER;
@@ -190,22 +192,20 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
      * See if there is a CertificateAuthenticator service that will
      * vouch for this cert chain. Return the 1st authenticator that
      * return true from authenticateCertificateChain()
-     * 
+     *
      * @param certChain
      * @throws LoginException
      * @return
      */
-    private CertificateAuthenticator getCertificateAuthenticator(X509Certificate[] certChain)
-                    throws LoginException {
+    private CertificateAuthenticator getCertificateAuthenticator(X509Certificate[] certChain) throws LoginException {
         CertificateAuthenticator certAuthen = null;
-        ConcurrentServiceReferenceMap<String, CertificateAuthenticator> certAuthens =
-                        JAASServiceImpl.getCertificateAuthenticators();
+        ConcurrentServiceReferenceMap<String, CertificateAuthenticator> certAuthens = JAASServiceImpl.getCertificateAuthenticators();
         Set<String> keys = certAuthens.keySet();
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
             Tr.debug(tc, "CertificateAuthenticator keys:", keys);
         }
         // Iterate through the CertificateAuthenticators and call
-        // authenticateCertificateChain. Return the 1st one to return true. 
+        // authenticateCertificateChain. Return the 1st one to return true.
         for (String key : keys) {
             CertificateAuthenticator current = certAuthens.getService(key);
             if (current.authenticateCertificateChain(certChain)) {
@@ -218,14 +218,15 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
 
     /**
      * Handles a collective certificate login.
-     * 
+     *
      * @param certChain
      * @param x509Subject
      * @throws InvalidNameException
      * @throws AuthenticationException
      * @throws Exception
      */
-    private void handleCollectiveLogin(X509Certificate certChain[], CollectiveAuthenticationPlugin plugin, boolean collectiveCert) throws InvalidNameException, AuthenticationException, Exception {
+    private void handleCollectiveLogin(X509Certificate certChain[], CollectiveAuthenticationPlugin plugin,
+                                       boolean collectiveCert) throws InvalidNameException, AuthenticationException, Exception {
         // If the chain is not authenticated, it will throw an AuthenticationException
         plugin.authenticateCertificateChain(certChain, collectiveCert);
         X509Certificate cert = certChain[0];
@@ -240,7 +241,7 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
 
     /**
      * Add unique ID and call setPrincipalAndCredentials
-     * 
+     *
      * @param accessId
      * @throws Exception
      */
@@ -249,13 +250,21 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
         Hashtable<String, Object> hashtable = new Hashtable<String, Object>();
         hashtable.put(AttributeNameConstants.WSCREDENTIAL_UNIQUEID, AccessIdUtil.getUniqueId(accessId));
         temporarySubject.getPublicCredentials().add(hashtable);
-        setPrincipalAndCredentials(temporarySubject, username, null, accessId, WSPrincipal.AUTH_METHOD_CERTIFICATE);
+        setWSPrincipal(temporarySubject, username, accessId, WSPrincipal.AUTH_METHOD_CERTIFICATE);
+        setCredentials(temporarySubject, username, username);
         temporarySubject.getPublicCredentials().remove(hashtable);
     }
 
     /**
      * Handles a non-collective certificate login.
-     * 
+     *
+     * Note:
+     * In distributed env, both username and securityName in this method are the same.
+     * In zOS env, username has platform cred appended while securityName does not.
+     *
+     * username : TESTUSER::c2c2c70001013....00
+     * securityName: TESTUSER
+     *
      * @param certChain
      * @throws RegistryException
      * @throws CertificateMapNotSupportedException
@@ -264,11 +273,15 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
      * @throws Exception
      */
     private void handleUserLogin(X509Certificate certChain[]) throws RegistryException, CertificateMapNotSupportedException, CertificateMapFailedException, EntryNotFoundException, Exception {
-        X509Certificate cert = certChain[0];
-
         UserRegistry userRegistry = getUserRegistry();
-        username = userRegistry.mapCertificate(cert);
+        username = userRegistry.mapCertificate(certChain);
         authenticatedId = userRegistry.getUniqueUserId(username);
+        securityName = userRegistry.getUserSecurityName(authenticatedId);
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            Tr.debug(tc, "username=[" + username +
+                         "] authenticatedId=[" + authenticatedId +
+                         "] securityName=[" + securityName + "]");
+        }
         setUpTemporarySubject();
     }
 
@@ -279,7 +292,7 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
      * be necessary to create a placeholder instead of a subject and modify the credentials
      * service to return a set of credentials or update the holder in order to place in
      * the shared state.
-     * 
+     *
      * @throws Exception
      */
     private void setUpTemporarySubject() throws Exception {
@@ -288,8 +301,9 @@ public class CertificateLoginModule extends ServerCommonLoginModule implements L
         String accessId = AccessIdUtil.createAccessId(AccessIdUtil.TYPE_USER,
                                                       ur.getRealm(),
                                                       ur.getUniqueUserId(username));
-        setPrincipalAndCredentials(temporarySubject, username, authenticatedId, accessId, WSPrincipal.AUTH_METHOD_CERTIFICATE);
-
+        setWSPrincipal(temporarySubject, securityName, accessId, WSPrincipal.AUTH_METHOD_CERTIFICATE);
+        setCredentials(temporarySubject, securityName, username);
+        setOtherPrincipals(temporarySubject, securityName, accessId, WSPrincipal.AUTH_METHOD_CERTIFICATE, null);
     }
 
     /** {@inheritDoc} */

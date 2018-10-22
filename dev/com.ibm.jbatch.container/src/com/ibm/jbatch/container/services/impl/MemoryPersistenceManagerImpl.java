@@ -306,7 +306,7 @@ public class MemoryPersistenceManagerImpl extends AbstractPersistenceManager imp
     }
 
     @Override
-    public JobInstance updateJobInstanceWithInstanceState(long jobInstanceId, InstanceState state, Date lastUpdated) {
+    public JobInstanceEntity updateJobInstanceWithInstanceState(long jobInstanceId, InstanceState state, Date lastUpdated) {
         JobInstanceEntity jobInstance = data.jobInstanceData.get(jobInstanceId);
 
         try {
@@ -321,18 +321,18 @@ public class MemoryPersistenceManagerImpl extends AbstractPersistenceManager imp
     }
 
     @Override
-    public JobInstance updateJobInstanceWithInstanceStateUponRestart(long jobInstanceId, InstanceState state, Date lastUpdated) {
+    public JobInstance updateJobInstanceOnRestart(long jobInstanceId, Date lastUpdated) {
         JobInstanceEntity jobInstance = data.jobInstanceData.get(jobInstanceId);
         if ((jobInstance.getInstanceState() == InstanceState.STOPPED) ||
             (jobInstance.getInstanceState() == InstanceState.FAILED)) {
 
             try {
-                verifyStateTransitionIsValid(jobInstance, state);
+                verifyStateTransitionIsValid(jobInstance, InstanceState.SUBMITTED);
             } catch (BatchIllegalJobStatusTransitionException e) {
                 throw new PersistenceException(e);
             }
 
-            jobInstance.setInstanceState(state);
+            jobInstance.setInstanceState(InstanceState.SUBMITTED);
             jobInstance.setBatchStatus(BatchStatus.STARTING);
             jobInstance.setLastUpdatedTime(lastUpdated);
         } else {
@@ -385,8 +385,8 @@ public class MemoryPersistenceManagerImpl extends AbstractPersistenceManager imp
     }
 
     @Override
-    public JobExecution updateJobExecutionAndInstanceNotSetToServerYet(long jobExecutionId,
-                                                                       Date lastUpdatedTime) throws NoSuchJobExecutionException, ExecutionAssignedToServerException {
+    public JobExecution updateJobExecutionAndInstanceOnStopBeforeServerAssigned(long jobExecutionId,
+                                                                                Date lastUpdatedTime) throws NoSuchJobExecutionException, ExecutionAssignedToServerException {
         JobExecutionEntity exec = getJobExecution(jobExecutionId);
         if (exec.getServerId().equals("")) {
 
@@ -448,7 +448,7 @@ public class MemoryPersistenceManagerImpl extends AbstractPersistenceManager imp
         exec.getJobInstance().setLastUpdatedTime(endTime);
         // set the state to be the same value as the batchstatus
         // Note: we only want to do this is if the batchStatus is one of the "done" statuses.
-        if (FINAL_STATUS_SET.contains(finalBatchStatus)) {
+        if (isFinalBatchStatus(finalBatchStatus)) {
             InstanceState newInstanceState = InstanceState.valueOf(finalBatchStatus.toString());
             exec.getJobInstance().setInstanceState(newInstanceState);
         }
@@ -1332,8 +1332,17 @@ public class MemoryPersistenceManagerImpl extends AbstractPersistenceManager imp
     @Override
     public List<JobInstanceEntity> getJobInstances(IJPAQueryHelper queryHelper, int page, int pageSize) {
         // TODO: Should we implement this for Memory Persistence?
-        throw new UnsupportedOperationException("The REST URL search parameters requesting this function "
-                                                + "are not supported by the Java batch memory-based persistence configuration.");
+        //throw new UnsupportedOperationException("The REST URL search parameters requesting this function "
+        //   + "are not supported by the Java batch memory-based persistence configuration.");
+
+        String delieveredQuery = queryHelper.getQuery();
+
+        if (delieveredQuery.equals(queryHelper.DEFAULT_QUERY)) {
+            return getJobInstances(page, pageSize);
+        } else {
+            throw new UnsupportedOperationException("The REST URL search parameters requesting this function "
+                                                    + "are not supported by the Java batch memory-based persistence configuration.");
+        }
     }
 
     @Override
@@ -1368,20 +1377,48 @@ public class MemoryPersistenceManagerImpl extends AbstractPersistenceManager imp
 
     /** {@inheritDoc} */
     @Override
+    public String getPersistenceType() {
+        return "MEM";
+    }
+
+    /** {@inheritDoc} */
+    /*
+     * @Override
+     *
+     * public List<String> getGroupNamesForJobID(long jobInstanceID) throws NoSuchJobInstanceException {
+     * // TODO Auto-generated method stub
+     * return null;
+     * }
+     */
+
+    /** {@inheritDoc} */
+    @Override
+    public JobInstanceEntity updateJobInstanceWithGroupNames(long jobInstanceId, Set<String> groupNames) {
+        return null;
+    }
+
+    /** {@inheritDoc} */
+    @Override
     public int getJobExecutionTableVersion() {
-        return 2;
+        return getJobExecutionTableVersionField();
     }
 
     /** {@inheritDoc} */
     @Override
     public int getJobInstanceTableVersion() {
+        return getJobInstanceTableVersionField();
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public Integer getJobExecutionTableVersionField() {
         return 2;
     }
 
     /** {@inheritDoc} */
     @Override
-    public String getPersistenceType() {
-        return "MEM";
+    public Integer getJobInstanceTableVersionField() {
+        return 3;
     }
 
 }

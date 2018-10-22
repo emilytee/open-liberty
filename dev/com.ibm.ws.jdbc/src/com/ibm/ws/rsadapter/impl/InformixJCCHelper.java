@@ -26,7 +26,6 @@ import com.ibm.ejs.cm.logger.TraceWriter;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.ffdc.FFDCFilter;
-import com.ibm.ws.kernel.service.util.PrivHelper;
 import com.ibm.ws.rsadapter.AdapterUtil;
 
 /**
@@ -123,7 +122,7 @@ public class InformixJCCHelper extends InformixHelper {
         try {
             Method m = methRef.get();
             if (m == null) {
-                Class<?> c = PrivHelper.loadClass(mcf.jdbcDriverLoader, "com.ibm.db2.jcc.DB2Connection");
+                Class<?> c = WSManagedConnectionFactoryImpl.priv.loadClass(mcf.jdbcDriverLoader, "com.ibm.db2.jcc.DB2Connection");
                 methRef.set(m = c.getMethod(methName, paramTypes));
             }
 

@@ -821,7 +821,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
         if (localConnection_ != null) {
             if (mcWrapper.getPoolState() == MCWrapper.ConnectionState_sharedTLSPool || mcWrapper.getPoolState() == MCWrapper.ConnectionState_unsharedTLSPool) {
                 if (mcWrapper.isDestroyState() || mcWrapper.isStale() || mcWrapper.hasFatalErrorNotificationOccurred(freePool[0].getFatalErrorNotificationTime())
-                    || ((this.agedTimeout != 0)
+                    || ((this.agedTimeout != -1)
                         && (mcWrapper.hasAgedTimedOut(this.agedTimeoutMillis)))) {
                     // Need to remove it from TLS and decrease total connection count.
                     ArrayList<MCWrapper> mh = localConnection_.get();
@@ -1348,7 +1348,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                             for (int i = 0; i < maxFreePoolHashSize; ++i) {
                                 /*
                                  *
-                                 * This is not double-checked locking. The following code diry
+                                 * This is not double-checked locking. The following code dirty
                                  * reads the size of the mcWrapperList that may be change at
                                  * any time by another thread. If it is greater than zero, we
                                  * need to synchronize and check the value again. If it is
@@ -1402,12 +1402,26 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                                          * waiter if one exists. This will allow the wait a chance
                                          * at creating a connection to return to the requester.
                                          */
-                                        synchronized (waiterFreePoolLock) {
-                                            this.totalConnectionCount.decrementAndGet();
-                                            if (waiterCount > 0) {
-                                                waiterFreePoolLock.notify();
+                                        if (e.getCause() instanceof InterruptedException) {
+                                            if (isTracingEnabled && tc.isDebugEnabled()) {
+                                                Tr.debug(tc, "Thread was interrupted, skipping decrement of total connection count");
                                             }
+                                            synchronized (waiterFreePoolLock) {
+                                                if (waiterCount > 0) {
+                                                    waiterFreePoolLock.notify();
+                                                }
+                                            }
+                                        } else {
+                                            synchronized (waiterFreePoolLock) {
+                                                int totalCount = this.totalConnectionCount.decrementAndGet();
+                                                if (isTracingEnabled && tc.isDebugEnabled()) {
+                                                  Tr.debug(tc, "Decrement of total connection count " + totalCount);
+                                                }
+                                                if (waiterCount > 0) {
+                                                    waiterFreePoolLock.notify();
+                                                }
 
+                                            }
                                         }
                                         throw e;
                                     }
@@ -1453,12 +1467,26 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                              * if one exists. This will allow the wait a chance at creating a
                              * connection to return to the requester.
                              */
-                            synchronized (waiterFreePoolLock) {
-                                this.totalConnectionCount.decrementAndGet();
-                                if (waiterCount > 0) {
-                                    waiterFreePoolLock.notify();
+                            if (e.getCause() instanceof InterruptedException) {
+                                if (isTracingEnabled && tc.isDebugEnabled()) {
+                                    Tr.debug(tc, "Thread was interrupted, skipping decrement of total connection count");
                                 }
+                                synchronized (waiterFreePoolLock) {
+                                    if (waiterCount > 0) {
+                                        waiterFreePoolLock.notify();
+                                    }
+                                }
+                            } else {
+                                synchronized (waiterFreePoolLock) {
+                                    int totalCount = this.totalConnectionCount.decrementAndGet();
+                                    if (isTracingEnabled && tc.isDebugEnabled()) {
+                                       Tr.debug(tc, "Decrement of total connection count " + totalCount);
+                                    }
+                                    if (waiterCount > 0) {
+                                        waiterFreePoolLock.notify();
+                                    }
 
+                                }
                             }
                             throw e;
                         }
@@ -1500,12 +1528,26 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                      * one exists. This will allow the wait a chance at creating a
                      * connection to return to the requester.
                      */
-                    synchronized (waiterFreePoolLock) {
-                        this.totalConnectionCount.decrementAndGet();
-                        if (waiterCount > 0) {
-                            waiterFreePoolLock.notify();
+                    if (e.getCause() instanceof InterruptedException) {
+                        if (isTracingEnabled && tc.isDebugEnabled()) {
+                            Tr.debug(tc, "Thread was interrupted, skipping decrement of total connection count");
                         }
+                        synchronized (waiterFreePoolLock) {
+                            if (waiterCount > 0) {
+                                waiterFreePoolLock.notify();
+                            }
+                        }
+                    } else {
+                        synchronized (waiterFreePoolLock) {
+                            int totalCount = this.totalConnectionCount.decrementAndGet();
+                            if (isTracingEnabled && tc.isDebugEnabled()) {
+                               Tr.debug(tc, "Decrement of total connection count " + totalCount);
+                            }
+                            if (waiterCount > 0) {
+                                waiterFreePoolLock.notify();
+                            }
 
+                        }
                     }
                     throw e;
                 }
@@ -2660,7 +2702,6 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
         synchronized (taskTimerLockObject) {
             if (!reaperThreadStarted) {
                 if (reapTime > 0) {
-
                     if ((this.unusedTimeout > 0)
                         || (this.agedTimeout > 0)) {
                         final PoolManager tempPM = this;
@@ -2822,7 +2863,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                             aBuffer.append("for transaction end and connection close - ");
                         } else {
                             if (mcw.isStale() || mcw.hasFatalErrorNotificationOccurred(freePool[0].getFatalErrorNotificationTime())
-                                || ((this.agedTimeout != 0)
+                                || ((this.agedTimeout != -1)
                                     && (mcw.hasAgedTimedOut(this.agedTimeoutMillis)))) {
                                 aBuffer.append("Connection marked to be destroyed.  Waiting ");
                                 aBuffer.append("for transaction end and connection close - ");
@@ -2904,7 +2945,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                         aBuffer.append("    ");
                         if (mcw.isStale()
                             || mcw.hasFatalErrorNotificationOccurred(freePool[0].getFatalErrorNotificationTime())
-                            || ((this.agedTimeout != 0) && (mcw.hasAgedTimedOut(this.agedTimeoutMillis)))) {
+                            || ((this.agedTimeout != -1) && (mcw.hasAgedTimedOut(this.agedTimeoutMillis)))) {
                             aBuffer.append("Connection marked to be destroyed.  Waiting ");
                             aBuffer.append("for transaction end and connection close - ");
                         }
@@ -3009,7 +3050,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                         aBuffer.append("    ");
                         if (mcw.isStale()
                             || mcw.hasFatalErrorNotificationOccurred(freePool[0].getFatalErrorNotificationTime())
-                            || ((this.agedTimeout != 0) && (mcw.hasAgedTimedOut(this.agedTimeoutMillis)))) {
+                            || ((this.agedTimeout != -1) && (mcw.hasAgedTimedOut(this.agedTimeoutMillis)))) {
                             aBuffer.append("Connection marked to be destroyed.  Waiting ");
                             aBuffer.append("for transaction end and connection close - ");
                         }
@@ -3060,7 +3101,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                         aBuffer.append("    ");
                         if (mcw.isStale()
                             || mcw.hasFatalErrorNotificationOccurred(freePool[0].getFatalErrorNotificationTime())
-                            || ((this.agedTimeout != 0) && (mcw.hasAgedTimedOut(this.agedTimeoutMillis)))) {
+                            || ((this.agedTimeout != -1) && (mcw.hasAgedTimedOut(this.agedTimeoutMillis)))) {
                             aBuffer.append("Connection marked to be destroyed.  Waiting ");
                             aBuffer.append("for transaction end and connection close - ");
                         }
@@ -3109,7 +3150,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                         aBuffer.append("    ");
                         if (mcw.isStale()
                             || mcw.hasFatalErrorNotificationOccurred(freePool[0].getFatalErrorNotificationTime())
-                            || ((this.agedTimeout != 0) && (mcw.hasAgedTimedOut(this.agedTimeoutMillis)))) {
+                            || ((this.agedTimeout != -1) && (mcw.hasAgedTimedOut(this.agedTimeoutMillis)))) {
                             aBuffer.append("Connection marked to be destroyed.  Waiting ");
                             aBuffer.append("for transaction end and connection close - ");
                         }
@@ -3159,7 +3200,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                 Date startDateTime = new Date(startHoldTime);
                 long timeInUseInSeconds = holdTime / 1000;
                 /*
-                 * Add the new inuse information to the trace.
+                 * Add the new in-use information to the trace.
                  */
                 aBuffer.append(" Start time inuse " + startDateTime + " Time inuse " + timeInUseInSeconds + " (seconds)" + nl);
                 Throwable t = ((com.ibm.ejs.j2c.MCWrapper) mcw).getInitialRequestStackTrace();
@@ -3195,7 +3236,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
         // at a time.
         if (collectorCount > 1) {
             // This condition will happen if the reapTime is set to low. Example:
-            // The reapTime = 1 second and the reclaimconnections takes more than
+            // The reapTime = 1 second and the reclaim connections takes more than
             // 1 second to finish.
             collectorCount--;
             return;
@@ -3217,13 +3258,13 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
             while (i.hasNext()) {
                 MCWrapper mcw = i.next();
                 if (mcw.getPoolState() == MCWrapper.ConnectionState_freeTLSPool) {
-                    if (agedTimeout != 0) {
+                    if (agedTimeout != -1) {
                         if (mcw.hasAgedTimedOut(agedTimeoutMillis)) {
                             removemcw = true;
                             break;
                         }
                     }
-                    if (!removemcw && unusedTimeout != 0) {
+                    if (!removemcw && unusedTimeout != -1) {
                         if (mcw.hasIdleTimedOut(unusedTimeout * 1000)
                             && (totalConnectionCount.get() > minConnections)) {
                             removemcw = true;
@@ -3249,14 +3290,14 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                 int localtotalConnectionCount = totalConnectionCount.get();
                 int mcwlSize = freePool[j].mcWrapperList.size();
                 for (int k = 0; k < mcwlSize; ++k) {
-                    MCWrapper mcw = (MCWrapper) freePool[j].mcWrapperList.get(k);;
-                    if (agedTimeout != 0) {
+                    MCWrapper mcw = (MCWrapper) freePool[j].mcWrapperList.get(k);
+                    if (agedTimeout != -1) {
                         if (mcw.hasAgedTimedOut(agedTimeoutMillis)) {
                             removemcw = true;
                             break;
                         }
                     }
-                    if (!removemcw && unusedTimeout != 0) {
+                    if (!removemcw && unusedTimeout != -1) {
                         if (mcw.hasIdleTimedOut(unusedTimeout * 1000)
                             && (localtotalConnectionCount > minConnections)) {
                             removemcw = true;
@@ -3303,7 +3344,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                 int mcwlSize = freePool[j].mcWrapperList.size();
                 for (int k = 0; k < mcwlSize; ++k) {
                     MCWrapper mcw = (MCWrapper) freePool[j].mcWrapperList.get(k);
-                    if (!removemcw && agedTimeout != 0) {
+                    if (!removemcw && agedTimeout != -1) {
                         if (mcw.hasAgedTimedOut(agedTimeoutMillis)) {
                             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                                 Tr.debug(this, tc, "Aged timeout reclaim connection " + mcw);
@@ -3311,7 +3352,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                             removemcw = true;
                         }
                     }
-                    if (!removemcw && unusedTimeout != 0) {
+                    if (!removemcw && unusedTimeout != -1) {
                         if (mcw.hasIdleTimedOut(unusedTimeout * 1000)
                             && (this.totalConnectionCount.get() > minConnections)) {
                             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
@@ -3376,7 +3417,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                             MCWrapper mcw = e.getKey();
                             if (mcw.getPoolState() == MCWrapper.ConnectionState_freeTLSPool) {
                                 ArrayList<MCWrapper> mh = e.getValue();
-                                if (agedTimeout != 0) {
+                                if (agedTimeout != -1) {
                                     if (mcw.hasAgedTimedOut(agedTimeoutMillis)) {
                                         mh.remove(mcw);
                                         tlsArrayLists.remove(mcw);
@@ -3390,7 +3431,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                                         continue;
                                     }
                                 }
-                                if (unusedTimeout != 0) {
+                                if (unusedTimeout != -1) {
                                     if (mcw.hasIdleTimedOut(unusedTimeout * 1000)
                                         && (this.totalConnectionCount.get() > minConnections)) {
                                         mh.remove(mcw);
@@ -3509,7 +3550,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
         }
         /*
          * Future improvement can be if we may
-         * wanna check subject a cri before
+         * want to check subject a cri before
          * computing hashcode again
          */
 
@@ -3517,7 +3558,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
 
         if (subject != null) {
 
-            // RRA currently returns false for reauthentication support
+            // RRA currently returns false for re-authentication support
             if (!gConfigProps.raSupportsReauthentication) {
                 /*
                  * If we are the rra or re-authentication is not supported,
@@ -4104,7 +4145,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                 logPropertyChangeMsg("connectionTimeout", connectionTimeout, value);
             }
             connectionTimeout = value;
-            displayInfiniteWaitMessage = (connectionTimeout == 0);
+            displayInfiniteWaitMessage = (connectionTimeout == -1);
             synchronized (waiterFreePoolLock) {
                 waiterFreePoolLock.notifyAll();
             }
@@ -4114,7 +4155,7 @@ public final class PoolManager implements Runnable, PropertyChangeListener, Veto
                 logPropertyChangeMsg("unusedTimeout", unusedTimeout, value);
             }
             unusedTimeout = value;
-            if (value > 0) {
+            if (value > -1) {
                 unusedTimeoutEnabled = true;
             } else {
                 unusedTimeoutEnabled = false;

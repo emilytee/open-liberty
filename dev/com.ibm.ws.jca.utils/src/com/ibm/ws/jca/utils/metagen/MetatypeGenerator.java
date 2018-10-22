@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2013,2016 IBM Corporation and others.
+ * Copyright (c) 2013, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -102,8 +102,6 @@ import com.ibm.wsspi.adaptable.module.UnableToAdaptException;
 
 /**
  * Generates metatype for a resource adapter based on ra.xml files.
- *
- * @see <a href="http://was.pok.ibm.com/xwiki/bin/view/LibertyCookbook/Metatype-Generator">Metatype Documentation</a>
  */
 public class MetatypeGenerator {
     private static final TraceComponent tc = Tr.register(MetatypeGenerator.class);
@@ -214,8 +212,6 @@ public class MetatypeGenerator {
 
         try {
             setup(configProps);
-
-            generalAdapterName = config.getInstance().adapterName;
 
             buildMetatype();
             postBuild(configProps);
@@ -417,10 +413,6 @@ public class MetatypeGenerator {
                 ad.setDescription("internal use only");
                 ocd.addMetatypeAd(ad);
             }
-        }
-
-        if (!adapter.getSecurityPermissions().isEmpty()) {
-            Tr.info(tc, "J2CA9935.secperm.not.supported", instance.adapterName);
         }
 
         RaOutboundResourceAdapter outbound = adapter.getOutboundResourceAdapter();
@@ -1136,10 +1128,10 @@ public class MetatypeGenerator {
                 if ("PASSWORD".equals(name) || "USER".equals(name) || "USERNAME".equals(name))
                     // special case for connection factories - override the description for user/userName/password to discourage usage
                     if (cType == ConstructType.ConnectionFactory)
-                    ad_configProperty.setRecommendAuthAliasUsage(true);
+                        ad_configProperty.setRecommendAuthAliasUsage(true);
                     // special case for activation spec - omit user/userName/password from the metatype
                     else
-                    return null;
+                        return null;
             }
 
             ad_configProperty.setMax(configProperty.getMax());
@@ -1240,6 +1232,8 @@ public class MetatypeGenerator {
     private void setup(Map<String, Object> configProps) throws IOException, JAXBException, SAXException, ParserConfigurationException, ClassNotFoundException, ResourceAdapterInternalException, UnableToAdaptException, InstantiationException, InvalidPropertyException, UnavailableException, ResourceAdapterInstallException {
 
         config = new MetaGenConfig(configProps);
+        generalAdapterName = config.getInstance().adapterName;
+
         suffixOverridesByIntf = config.get(MetaGenConstants.KEY_SUFFIX_OVERRIDES_BY_INTERFACE, Collections.<String, String> emptyMap());
         suffixOverridesByImpl = config.get(MetaGenConstants.KEY_SUFFIX_OVERRIDES_BY_IMPL, Collections.<String, String> emptyMap());
         suffixOverridesByBoth = config.get(MetaGenConstants.KEY_SUFFIX_OVERRIDES_BY_BOTH, Collections.<String, String> emptyMap());

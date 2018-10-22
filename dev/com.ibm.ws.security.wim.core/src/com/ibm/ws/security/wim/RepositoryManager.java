@@ -22,14 +22,15 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.websphere.ras.annotation.Trivial;
+import com.ibm.websphere.security.audit.context.AuditManager;
 import com.ibm.websphere.security.wim.ras.WIMMessageHelper;
 import com.ibm.websphere.security.wim.ras.WIMMessageKey;
-import com.ibm.ws.ffdc.annotation.FFDCIgnore;
-import com.ibm.ws.security.registry.SearchResult;
+import com.ibm.ws.security.audit.Audit;
 import com.ibm.ws.security.registry.UserRegistry;
+import com.ibm.ws.security.wim.adapter.urbridge.URBridge;
 import com.ibm.ws.security.wim.util.UniqueNameHelper;
 import com.ibm.wsspi.security.wim.CustomRepository;
-import com.ibm.wsspi.security.wim.SchemaConstants;
 import com.ibm.wsspi.security.wim.exception.InitializationException;
 import com.ibm.wsspi.security.wim.exception.InvalidUniqueNameException;
 import com.ibm.wsspi.security.wim.exception.WIMException;
@@ -49,6 +50,8 @@ public class RepositoryManager {
 
     private final VMMService vmmService;
 
+    private volatile int numRepos = 0; // short cut for error checking on how many repos we have
+
     private final Map<String, RepositoryWrapper> repositories = new ConcurrentHashMap<String, RepositoryWrapper>();
 
     public RepositoryManager(VMMService service) {
@@ -57,18 +60,34 @@ public class RepositoryManager {
 
     void addConfiguredRepository(String repositoryId, ConfiguredRepository configuredRepository) {
         RepositoryWrapper repositoryHolder = new ConfiguredRepositoryWrapper(repositoryId, configuredRepository);
-        repositories.put(repositoryId, repositoryHolder);
+        addRepository(repositoryId, repositoryHolder);
     }
 
     void addCustomRepository(String repositoryId, CustomRepository customRepository) {
         RepositoryWrapper repositoryHolder = new CustomRepositoryWrapper(repositoryId, customRepository);
+        addRepository(repositoryId, repositoryHolder);
+    }
+
+    /**
+     * Pair adding to the repositories map and resetting the numRepos int.
+     *
+     * @param repositoryId
+     * @param repositoryHolder
+     */
+    private void addRepository(String repositoryId, RepositoryWrapper repositoryHolder) {
         repositories.put(repositoryId, repositoryHolder);
+        try {
+            numRepos = getNumberOfRepositories();
+        } catch (WIMException e) {
+            // okay
+        }
     }
 
     void addUserRegistry(UserRegistry userRegistry) {
         try {
             UserRegistryWrapper repositoryHolder = new UserRegistryWrapper(userRegistry, vmmService.getConfigManager());
-            repositories.put(userRegistry.getRealm(), repositoryHolder);
+            addRepository(userRegistry.getRealm(), repositoryHolder);
+
         } catch (InitializationException e) {
             //TODO will occur on lookup when this is made lazy.
         }
@@ -78,6 +97,11 @@ public class RepositoryManager {
         RepositoryWrapper repositoryHolder = repositories.remove(id);
         if (repositoryHolder != null) {
             repositoryHolder.clear();
+        }
+        try {
+            numRepos = getNumberOfRepositories();
+        } catch (WIMException e) {
+            // okay
         }
     }
 
@@ -92,47 +116,6 @@ public class RepositoryManager {
             return repositoryHolder.getRepository();
         }
         return null;
-//        ConcurrentServiceReferenceMap<String, RepositoryConfiguration> configs = vmmService.getRepositoryConfigurations();
-//
-//        if (tc.isDebugEnabled())
-//            Tr.debug(tc, "Config = " + configs);
-//        RepositoryConfig config = configs.getService(instanceId);
-//
-//        if (config != null) {
-//            RepositoryFactory factory = getRepositoryFactory(config.getType()); //LATEST ISSUE HERE
-//
-//            // If the RepositoryConfiguration is a URRepositoryConfiguration, set the config manager
-//            // if (config instanceof URRepositoryConfiguration)
-//            //     ((URRepositoryConfiguration) config).setConfigManager(vmmService.getConfigManager());
-//            Repository repos = config.getRepository(factory);
-//            return repos;
-//        } else {
-//            Set<Object> userRegistries = vmmService.getUserRegistries();
-//
-//            Iterator<Object> URIterator = userRegistries.iterator();
-//            while (URIterator.hasNext()) {
-//                Object ur = URIterator.next();
-//                String realm = getRealm(ur);
-//
-//                if (realm != null && realm.equals(instanceId)) {
-//                    // Check if we have a cached instance.
-//                    if (cachedRepository.containsKey(instanceId)) {
-//                        return cachedRepository.get(instanceId);
-//                    } else {
-//                        Map<String, Object> properties = new HashMap<String, Object>();
-//                        properties.put(KEY_REGISTRY, ur);
-////                        properties.put(KEY_CONFIG_MANAGER, vmmService.getConfigManager());
-//                        properties.put(VMMService.KEY_ID, realm);
-//                        properties.put(BASE_ENTRY, "o=" + realm);
-//
-//                        Repository repos = new URBridge(properties, (UserRegistry) ur, vmmService.getConfigManager());
-//                        cachedRepository.put(instanceId, repos);
-//                        return repos;
-//                    }
-//                }
-//            }
-//        }
-//        return null;
     }
 
     public Repository getTargetRepository(String uniqueName) throws WIMException {
@@ -173,6 +156,10 @@ public class RepositoryManager {
             return repo;
         }
 
+        AuditManager auditManager = new AuditManager();
+        Audit.audit(Audit.EventID.SECURITY_MEMBER_MGMT_01, auditManager.getRESTRequest(), auditManager.getRequestType(), auditManager.getRepositoryId(), uniqueName,
+                    vmmService.getConfigManager().getDefaultRealmName(), null, Integer.valueOf("204"));
+
         throw new InvalidUniqueNameException(WIMMessageKey.ENTITY_NOT_IN_REALM_SCOPE, Tr.formatMessage(
                                                                                                        tc,
                                                                                                        WIMMessageKey.ENTITY_NOT_IN_REALM_SCOPE,
@@ -186,40 +173,6 @@ public class RepositoryManager {
             reposNodesMap.put(entry.getKey(), new ArrayList<String>(entry.getValue().getRepositoryBaseEntries().keySet()));
         }
         return reposNodesMap;
-
-//        ConcurrentServiceReferenceMap<String, RepositoryConfiguration> configs = vmmService.getRepositoryConfigurations();
-//        Set<Object> userRegistries = vmmService.getUserRegistries();
-//        if ((configs == null || configs.isEmpty()) && (userRegistries == null || userRegistries.isEmpty())) {
-//            return reposNodesMap;
-//        }
-//
-//        if (configs != null && !configs.isEmpty()) {
-//            Iterator<RepositoryConfiguration> itr = configs.getServices();
-//            while (itr.hasNext()) {
-//                RepositoryConfig config = itr.next();
-//                List<String> baseEntries = new ArrayList<String>();
-//                baseEntries.addAll(config.getRepositoryBaseEntries().keySet());
-//                reposNodesMap.put(config.getReposId(), baseEntries); //TODO handle null baseEntries
-//            }
-//        }
-//
-//        if (userRegistries != null && !userRegistries.isEmpty()) {
-//            Iterator<Object> URIterator = userRegistries.iterator();
-//            while (URIterator.hasNext()) {
-//                Object ur = URIterator.next();
-//                String realm = getRealm(ur);
-//
-//                if (realm != null) {
-//                    String baseEntry = "o=" + realm;
-//                    List<String> baseEntries = new ArrayList<String>();
-//                    baseEntries.add(baseEntry);
-//                    String reposId = realm;
-//                    reposNodesMap.put(reposId, baseEntries);
-//                }
-//            }
-//        }
-//
-//        return reposNodesMap;
     }
 
     public Map<String, String> getRepositoryBaseEntries(String reposId) throws WIMException {
@@ -228,69 +181,26 @@ public class RepositoryManager {
             return repositoryHolder.getRepositoryBaseEntries();
         }
         return Collections.emptyMap();
-//        List<String> baseEntries = new ArrayList<String>();
-//
-//        RepositoryConfig config = vmmService.getRepositoryConfigurations().getService(reposId);
-//        if (config != null)
-//            baseEntries.addAll(config.getRepositoryBaseEntries().keySet());
-//        else {
-//            Set<Object> userRegistries = vmmService.getUserRegistries();
-//
-//            if (userRegistries != null && !userRegistries.isEmpty()) {
-//                Iterator<Object> URIterator = userRegistries.iterator();
-//                urSearch: while (URIterator.hasNext()) {
-//                    Object ur = URIterator.next();
-//                    String realm = getRealm(ur);
-//
-//                    if (realm != null && realm.equals(reposId)) {
-//                        String baseEntry = "o=" + realm;
-//                        baseEntries.add(baseEntry);
-//                        break urSearch;
-//                    }
-//                }
-//            }
-//        }
-//
-//        return baseEntries;
     }
 
     public List<String> getRepoIds() throws WIMException {
         return new ArrayList<String>(repositories.keySet());
-//        List<String> repoIds = new ArrayList<String>();
-//        ConcurrentServiceReferenceMap<String, RepositoryConfiguration> configs = vmmService.getRepositoryConfigurations();
-//
-//        Set<Object> userRegistries = vmmService.getUserRegistries();
-//
-//        if ((configs == null || configs.isEmpty()) && (userRegistries == null || userRegistries.isEmpty())) {
-//            return repoIds;
-//        }
-//
-//        Iterator<RepositoryConfiguration> itr = configs.getServices();
-//        while (itr.hasNext()) {
-//            RepositoryConfig config = itr.next();
-//            // If repository Id is not already added then add it to the list
-//            if (!repoIds.contains(config.getReposId())) {
-//                repoIds.add(config.getReposId());
-//            }
-//        }
-//
-//        Iterator<Object> URIterator = userRegistries.iterator();
-//        while (URIterator.hasNext()) {
-//            Object ur = URIterator.next();
-//            // Default the repository Id to its configured realm
-//            String repoId = getRealm(ur);
-//
-//            // If repository Id is not already added then add it to the list
-//            if (!repoIds.contains(repoId)) {
-//                repoIds.add(repoId);
-//            }
-//        }
-//
-//        return repoIds;
     }
 
     public int getNumberOfRepositories() throws WIMException {
         return getRepoIds().size();
+    }
+
+    /**
+     * Gets the shortcut number of repositories, to do a quick check on the number of repos.
+     * To get the actual map size, call getNumberOfRepositories().
+     *
+     * @return
+     * @throws WIMException
+     */
+    @Trivial
+    public int getNumberOfRepositoriesVolatile() throws WIMException {
+        return numRepos;
     }
 
     /**
@@ -364,44 +274,6 @@ public class RepositoryManager {
             repositoriesForGroup.put(entry.getKey(), entry.getValue().getRepositoryGroups());
         }
         return repositoriesForGroup;
-
-//        ConcurrentServiceReferenceMap<String, RepositoryConfiguration> configs = vmmService.getRepositoryConfigurations();
-//        Set<Object> userRegistries = vmmService.getUserRegistries();
-//
-//        if ((configs == null || configs.isEmpty()) && (userRegistries == null || userRegistries.isEmpty())) {
-//            return repositoriesForGroup;
-//        }
-//
-//        Iterator<RepositoryConfiguration> itr = configs.getServices();
-//        while (itr.hasNext()) {
-//            RepositoryConfig config = itr.next();
-//            // TODO not tested
-//            String[] reposForGroups = config.getRepositoriesForGroups();
-//            repositoriesForGroup.put(config.getReposId(), new HashSet<String>());
-//
-//            if (reposForGroups != null && reposForGroups.length > 0) {
-//                for (int k = 0; k < reposForGroups.length; k++) {
-//                    String grpReposId = reposForGroups[k].trim();
-//                    Set<String> grpReposIdSet = repositoriesForGroup.get(config.getReposId());
-//
-//                    grpReposIdSet.add(grpReposId);
-//                    repositoriesForGroup.put(config.getReposId(), grpReposIdSet);
-//                }
-//            }
-//        }
-//
-//        Iterator<Object> URIterator = userRegistries.iterator();
-//        while (URIterator.hasNext()) {
-//            Object ur = URIterator.next();
-//            // Default the repository Id to its configured realm
-//            String repoId = getRealm(ur);
-//
-//            HashSet<String> repositoryIdForGroup = new HashSet<String>();
-//            repositoryIdForGroup.add(repoId);
-//            repositoriesForGroup.put(repoId, repositoryIdForGroup);
-//        }
-//
-//        return repositoriesForGroup;
     }
 
     //TODO not tested.
@@ -430,7 +302,6 @@ public class RepositoryManager {
             return repositoryHolder.getRepositoryGroups();
         }
         return null;
-//        return getRepositoriesForGroup().get(reposID);
     }
 
     private Map<String, Set<String>> getRepositoriesForGroupMembers() {
@@ -449,31 +320,6 @@ public class RepositoryManager {
             }
         }
         return groupToRepositoryId;
-//        ConcurrentServiceReferenceMap<String, RepositoryConfiguration> configs = vmmService.getRepositoryConfigurations();
-//        if (configs == null || configs.isEmpty()) {
-//            return repositoriesForGroupMembers;
-//        }
-//
-//        Iterator<RepositoryConfiguration> itr = configs.getServices();
-//        while (itr.hasNext()) {
-//            RepositoryConfig config = itr.next();
-//            // TODO not tested
-//            String[] reposForGroups = config.getRepositoriesForGroups();
-//
-//            if (reposForGroups != null && reposForGroups.length > 0) {
-//                for (int k = 0; k < reposForGroups.length; k++) {
-//                    String grpReposId = reposForGroups[k].trim();
-//
-//                    Set<String> mbrReposIdSet = repositoriesForGroupMembers.get(grpReposId);
-//                    if (mbrReposIdSet == null) {
-//                        mbrReposIdSet = new HashSet<String>();
-//                    }
-//                    mbrReposIdSet.add(config.getReposId());
-//                    repositoriesForGroupMembers.put(grpReposId, mbrReposIdSet);
-//                }
-//            }
-//        }
-//        return repositoriesForGroupMembers;
     }
 
     //TODO not tested.
@@ -502,57 +348,19 @@ public class RepositoryManager {
      * @param uniqueName
      * @return
      */
-    @FFDCIgnore(Exception.class)
     public List<String> getFederationUREntityType(String data) {
-        for (RepositoryWrapper rh : repositories.values()) {
-            if (rh instanceof UserRegistryWrapper) {
-                UserRegistry ur = ((UserRegistryWrapper) rh).getUserRegistry();
+        List<String> result = null;
 
-                try {
-                    SearchResult result = ur.getUsers(data, 1);
-                    if (result != null && result.getList().size() > 0) {
-                        ArrayList<String> returnValue = new ArrayList<String>();
-                        returnValue.add(SchemaConstants.DO_PERSON_ACCOUNT);
-                        returnValue.add(data);
-                        return returnValue;
-                    }
-                } catch (Exception e) {
-                }
-
-                try {
-                    SearchResult result = ur.getGroups(data, 1);
-                    if (result != null && result.getList().size() > 0) {
-                        ArrayList<String> returnValue = new ArrayList<String>();
-                        returnValue.add(SchemaConstants.DO_GROUP);
-                        returnValue.add(data);
-                        return returnValue;
-                    }
-                } catch (Exception e) {
-                }
-
-                try {
-                    String result = ur.getUserSecurityName(data);
-                    if (result != null) {
-                        ArrayList<String> returnValue = new ArrayList<String>();
-                        returnValue.add(SchemaConstants.DO_PERSON_ACCOUNT);
-                        returnValue.add(result);
-                        return returnValue;
-                    }
-                } catch (Exception e) {
-                }
-
-                try {
-                    String result = ur.getGroupSecurityName(data);
-                    if (result != null) {
-                        ArrayList<String> returnValue = new ArrayList<String>();
-                        returnValue.add(SchemaConstants.DO_GROUP);
-                        returnValue.add(result);
-                        return returnValue;
-                    }
-                } catch (Exception e) {
+        for (RepositoryWrapper rw : repositories.values()) {
+            if (rw instanceof UserRegistryWrapper) {
+                URBridge bridge = (URBridge) ((UserRegistryWrapper) rw).getRepository();
+                result = bridge.getEntityType(data);
+                if (result != null) {
+                    break;
                 }
             }
         }
-        return null;
+
+        return result;
     }
 }

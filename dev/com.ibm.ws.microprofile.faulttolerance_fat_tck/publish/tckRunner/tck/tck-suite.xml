@@ -1,0 +1,36 @@
+<!-- Licensed under the Apache License, Version 2.0 (the "License"); you 
+    may not use this file except in compliance with the License. You may obtain 
+    a copy of the License at http://www.apache.org/licenses/LICENSE-2.0 Unless 
+    required by applicable law or agreed to in writing, software distributed 
+    under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES 
+    OR CONDITIONS OF ANY KIND, either express or implied. See the License for 
+    the specific language governing permissions and limitations under the License. -->
+<!DOCTYPE suite SYSTEM "http://testng.org/testng-1.0.dtd" >
+
+<suite name="microprofile-faulttolerance-TCK" verbose="2"
+    configfailurepolicy="continue">
+
+    <test name="microprofile-faulttolerance 1.0 TCK">
+        <packages>
+            <method-selectors>
+                <method-selector>
+                    <script language="beanshell">
+                    <!-- Some of the bulkhead tests fail when the test server are super slow...
+                         There's a race condition that causes these TCK tests to occasionally fail
+                         if the execution service has threads available but is slow to start work.
+                         For information on testBulkheadMethodAsynchronousRetry55Trip see OL#2994
+                         For information on testBulkheadClassAsynchFutureDoneWithoutGet see OL#3376 -->
+                         <![CDATA[
+                        !method.getName().startsWith("testBulkheadClassAsynchFutureDoneWithoutGet") &&
+                        !method.getName().startsWith("testBulkheadClassAsynchronousQueueing10") &&
+                        !method.getName().startsWith("testBulkheadMethodAsynchronousQueueing10") &&
+                        !method.getName().startsWith("testBulkheadMethodAsynchronousRetry55Trip") &&
+                        !method.getName().startsWith("testBulkheadQueReplacesDueToClassRetryFailures")
+                    ]]>
+                    </script>
+                </method-selector>
+            </method-selectors>
+            <package name="org.eclipse.microprofile.fault.tolerance.tck.*"></package>
+        </packages>
+    </test>
+</suite>

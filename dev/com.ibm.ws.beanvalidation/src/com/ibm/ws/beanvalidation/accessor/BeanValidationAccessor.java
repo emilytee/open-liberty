@@ -10,24 +10,28 @@
  *******************************************************************************/
 package com.ibm.ws.beanvalidation.accessor;
 
+import java.security.AccessController;
+
 import javax.validation.ValidatorFactory;
 
-import org.osgi.framework.BundleContext;
+import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.beanvalidation.service.BeanValidation;
+import com.ibm.ws.kernel.service.util.SecureAction;
 import com.ibm.ws.runtime.metadata.ComponentMetaData;
 import com.ibm.ws.threadContext.ComponentMetaDataAccessorImpl;
 
 public class BeanValidationAccessor {
 
     private static final TraceComponent tc = Tr.register(BeanValidationAccessor.class);
+    final static SecureAction priv = AccessController.doPrivileged(SecureAction.get());
 
     public static ValidatorFactory getValidatorFactory() {
-        BundleContext bctx = FrameworkUtil.getBundle(BeanValidationAccessor.class).getBundleContext();
-        BeanValidation bv = bctx.getService(bctx.getServiceReference(BeanValidation.class));
+        Bundle bundle = FrameworkUtil.getBundle(BeanValidationAccessor.class);
+        BeanValidation bv = priv.getService(bundle, BeanValidation.class);
 
         if (bv != null) {
             ComponentMetaData cmd = ComponentMetaDataAccessorImpl.getComponentMetaDataAccessor().getComponentMetaData();
@@ -43,5 +47,4 @@ public class BeanValidationAccessor {
         }
         return null;
     }
-
 }

@@ -27,7 +27,6 @@ import java.util.logging.Level;
 import com.ibm.ws.session.SessionManagerConfig;
 import com.ibm.ws.session.SessionStatistics;
 import com.ibm.ws.session.store.common.BackedSession;
-import com.ibm.ws.session.store.common.LoggingUtil;
 import com.ibm.wsspi.session.IStore;
 
 /*
@@ -172,7 +171,7 @@ public class DatabaseHashMapMR extends DatabaseHashMap {
             // we are not synchronized here - were not in old code either
             Hashtable sht = null;
             if (_smc.writeAllProperties()) {
-                Hashtable ht = d2.getSwappableData();
+                Hashtable ht = (Hashtable) d2.getSwappableData();
                 vEnum = ht.keys();
                 doWrite = true;
                 if (com.ibm.websphere.ras.TraceComponent.isAnyTracingEnabled() && LoggingUtil.SESSION_LOGGER_WAS.isLoggable(Level.FINE)) {

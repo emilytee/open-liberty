@@ -16,6 +16,7 @@ import javax.servlet.http.HttpServletRequest;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.ws.security.authentication.filter.AuthenticationFilter;
 import com.ibm.ws.security.mp.jwt.MicroProfileJwtConfig;
 import com.ibm.ws.security.mp.jwt.TraceConstants;
 import com.ibm.ws.security.mp.jwt.error.MpJwtProcessingException;
@@ -67,14 +68,14 @@ public class TAIRequestHelper {
      * @param mpJwtTaiRequest
      * @return
      */
-    public boolean requestShouldBeHandledByTAI(HttpServletRequest request, MicroProfileJwtTaiRequest mpJwtTaiRequest) {
+    public boolean requestShouldBeHandledByTAI(HttpServletRequest request, MicroProfileJwtTaiRequest mpJwtTaiRequest, boolean defaultConfig) {
         String methodName = "requestShouldBeHandledByTAI";
         if (tc.isDebugEnabled()) {
             Tr.entry(tc, methodName, request, mpJwtTaiRequest);
         }
 
         String loginHint = getLoginHint(request);
-        mpJwtTaiRequest = setTaiRequestConfigInfo(request, loginHint, mpJwtTaiRequest);
+        mpJwtTaiRequest = setTaiRequestConfigInfo(request, loginHint, mpJwtTaiRequest, defaultConfig);
         boolean result = false;
         boolean ignoreAppAuthMethod = true;
 
@@ -85,18 +86,40 @@ public class TAIRequestHelper {
 
         }
         if (mpJwtConfig != null) {
+            if (shouldDeferToJwtSso(request, mpJwtConfig)) {
+                return false;
+            }
             ignoreAppAuthMethod = mpJwtConfig.ignoreApplicationAuthMethod(); // true by default
-        }
-        if (ignoreAppAuthMethod) {
-            result = mpJwtTaiRequest.hasServices();
-        } else {
-            result = isMpJwtSpecifiedInLoginConfig(request);
+            if (ignoreAppAuthMethod) {
+                result = mpJwtTaiRequest.hasServices();
+            } else {
+                result = isMpJwtSpecifiedInLoginConfig(request);
+            }
         }
 
         if (tc.isDebugEnabled()) {
             Tr.exit(tc, methodName, result);
         }
         return result;
+    }
+
+    // if we don't have a valid bearer header, and jwtsso is active, we should defer.
+    private boolean shouldDeferToJwtSso(HttpServletRequest req, MicroProfileJwtConfig config) {
+        if (!isJwtSsoFeatureActive(config)) {
+            return false;
+        }
+
+        String hdrValue = req.getHeader(Authorization_Header);
+        if (tc.isDebugEnabled()) {
+            Tr.debug(tc, "Authorization header=", hdrValue);
+        }
+        boolean haveValidBearerHeader = (hdrValue != null && hdrValue.startsWith("Bearer "));
+        return !haveValidBearerHeader;
+
+    }
+
+    public boolean isJwtSsoFeatureActive(MicroProfileJwtConfig config) {
+        return config.toString().contains("com.ibm.ws.security.jwtsso.internal.JwtSsoComponent");
     }
 
     /**
@@ -112,12 +135,16 @@ public class TAIRequestHelper {
             }
             if (!AUTHN_TYPE.equals(loginCfg)) {
                 String msg = Tr.formatMessage(tc, "MPJWT_NOT_FOUND_IN_APPLICATION", new Object[] { AUTHN_TYPE, loginCfg, "ignoreApplicationAuthMethod", "false" });
-                Tr.warning(tc, msg);
+                if (tc.isDebugEnabled()) {
+                    Tr.debug(tc, "isMpJwtSpecifiedInLoginConfig ", msg);
+                }
             }
             return (AUTHN_TYPE.equals(loginCfg));
         }
         String msg = Tr.formatMessage(tc, "MPJWT_NOT_FOUND_IN_APPLICATION", new Object[] { AUTHN_TYPE, "null", "ignoreApplicationAuthMethod", "false" });
-        Tr.warning(tc, msg);
+        if (tc.isDebugEnabled()) {
+            Tr.debug(tc, "isMpJwtSpecifiedInLoginConfig ", msg);
+        }
         return false;
 
     }
@@ -215,7 +242,7 @@ public class TAIRequestHelper {
         return param;
     }
 
-    MicroProfileJwtTaiRequest setTaiRequestConfigInfo(HttpServletRequest request, String specifiedServiceId, MicroProfileJwtTaiRequest mpJwtTaiRequest) {
+    MicroProfileJwtTaiRequest setTaiRequestConfigInfo(HttpServletRequest request, String specifiedServiceId, MicroProfileJwtTaiRequest mpJwtTaiRequest, boolean defaultConfig) {
         String methodName = "setTaiRequestConfigInfo";
         if (tc.isDebugEnabled()) {
             Tr.entry(tc, methodName, request, specifiedServiceId, mpJwtTaiRequest);
@@ -224,7 +251,7 @@ public class TAIRequestHelper {
             if (tc.isDebugEnabled()) {
                 Tr.debug(tc, "Specific config ID not provided, so will set generic config information for MpJwtTaiRequest object");
             }
-            MicroProfileJwtTaiRequest result = setGenericAndFilteredConfigTaiRequestInfo(request, mpJwtTaiRequest);
+            MicroProfileJwtTaiRequest result = setGenericAndFilteredConfigTaiRequestInfo(request, mpJwtTaiRequest, defaultConfig);
             if (tc.isDebugEnabled()) {
                 Tr.exit(tc, methodName, result);
             }
@@ -237,7 +264,7 @@ public class TAIRequestHelper {
         return result;
     }
 
-    MicroProfileJwtTaiRequest setGenericAndFilteredConfigTaiRequestInfo(HttpServletRequest request, MicroProfileJwtTaiRequest mpJwtTaiRequest) {
+    MicroProfileJwtTaiRequest setGenericAndFilteredConfigTaiRequestInfo(HttpServletRequest request, MicroProfileJwtTaiRequest mpJwtTaiRequest, boolean defaultConfig) {
         String methodName = "setGenericAndFilteredConfigTaiRequestInfo";
         if (tc.isDebugEnabled()) {
             Tr.entry(tc, methodName, request, mpJwtTaiRequest);
@@ -246,14 +273,14 @@ public class TAIRequestHelper {
             mpJwtTaiRequest = createMicroProfileJwtTaiRequestAndSetRequestAttribute(request);
         }
         Iterator<MicroProfileJwtConfig> services = getConfigServices();
-        MicroProfileJwtTaiRequest result = setGenericAndFilteredConfigTaiRequestInfoFromConfigServices(request, mpJwtTaiRequest, services);
+        MicroProfileJwtTaiRequest result = setGenericAndFilteredConfigTaiRequestInfoFromConfigServices(request, mpJwtTaiRequest, services, defaultConfig);
         if (tc.isDebugEnabled()) {
             Tr.exit(tc, methodName, result);
         }
         return result;
     }
 
-    MicroProfileJwtTaiRequest setGenericAndFilteredConfigTaiRequestInfoFromConfigServices(HttpServletRequest request, MicroProfileJwtTaiRequest mpJwtTaiRequest, Iterator<MicroProfileJwtConfig> services) {
+    MicroProfileJwtTaiRequest setGenericAndFilteredConfigTaiRequestInfoFromConfigServices(HttpServletRequest request, MicroProfileJwtTaiRequest mpJwtTaiRequest, Iterator<MicroProfileJwtConfig> services, boolean defaultConfig) {
         String methodName = "setGenericAndFilteredConfigTaiRequestInfoFromConfigServices";
         if (tc.isDebugEnabled()) {
             Tr.entry(tc, methodName, request, mpJwtTaiRequest, services);
@@ -270,19 +297,30 @@ public class TAIRequestHelper {
 
         while (services.hasNext()) {
             MicroProfileJwtConfig mpJwtConfig = services.next();
-            //            AuthenticationFilter authFilter = mpJwtConfig.getAuthFilter();
-            //            if (authFilter != null) {
-            //                if (authFilter.isAccepted(request)) {
-            //                    mpJwtTaiRequest.addFilteredConfig(mpJwtConfig);
-            //                }
-            //            } else {
-            mpJwtTaiRequest.addGenericConfig(mpJwtConfig);
-            //            }
+            AuthenticationFilter authFilter = MicroProfileJwtTAI.getAuthFilter(mpJwtConfig.getAuthFilterRef());
+            if (authFilter != null) {
+                if (authFilter.isAccepted(request)) {
+                    mpJwtTaiRequest.addFilteredConfig(mpJwtConfig);
+                }
+            } else if (defaultConfig) {
+                mpJwtTaiRequest.addGenericConfig(mpJwtConfig);
+            } else if (!isMpJwtDefaultConfig(mpJwtConfig)){
+                mpJwtTaiRequest.addGenericConfig(mpJwtConfig);
+            }
         }
         if (tc.isDebugEnabled()) {
             Tr.exit(tc, methodName, mpJwtTaiRequest);
         }
         return mpJwtTaiRequest;
+    }
+    
+    public boolean isMpJwtDefaultConfig(MicroProfileJwtConfig mpJwtConfig) {
+        boolean isDefault = false;
+        if ("defaultMpJwt".equals(mpJwtConfig.getUniqueId())) {
+            isDefault = true;
+        }
+        return isDefault;
+        
     }
 
     MicroProfileJwtTaiRequest setSpecificConfigTaiRequestInfo(HttpServletRequest request, String configId, MicroProfileJwtTaiRequest mpJwtTaiRequest) {
@@ -320,10 +358,10 @@ public class TAIRequestHelper {
             Tr.entry(tc, methodName, request, configId);
         }
         MicroProfileJwtConfig mpJwtConfig = getConfig(configId);
-        //        if (!configAuthFilterMatchesRequest(request, mpJwtConfig)) {
-        //            // The config with the specified ID isn't configured to service this request
-        //            mpJwtConfig = null;
-        //        }
+        if (!configAuthFilterMatchesRequest(request, mpJwtConfig)) {
+            // The config with the specified ID isn't configured to service this request
+            mpJwtConfig = null;
+        }
         if (tc.isDebugEnabled()) {
             Tr.exit(tc, methodName, mpJwtConfig);
         }
@@ -338,18 +376,18 @@ public class TAIRequestHelper {
         return MicroProfileJwtTAI.getMicroProfileJwtConfig(configId);
     }
 
-    //    boolean configAuthFilterMatchesRequest(HttpServletRequest request, MicroProfileJwtConfig config) {
-    //        if (config == null) {
-    //            return false;
-    //        }
-    //        AuthenticationFilter authFilter = config.getAuthFilter();
-    //        if (authFilter != null) {
-    //            if (!authFilter.isAccepted(request)) {
-    //                // Specified configuration is present but its auth filter is not configured to service this request
-    //                return false;
-    //            }
-    //        }
-    //        return true;
-    //    }
+    boolean configAuthFilterMatchesRequest(HttpServletRequest request, MicroProfileJwtConfig config) {
+        if (config == null) {
+            return false;
+        }
+        AuthenticationFilter authFilter = MicroProfileJwtTAI.getAuthFilter(config.getAuthFilterRef());
+        if (authFilter != null) {
+            if (!authFilter.isAccepted(request)) {
+                // Specified configuration is present but its auth filter is not configured to service this request
+                return false;
+            }
+        }
+        return true;
+    }
 
 }

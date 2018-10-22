@@ -20,11 +20,13 @@ import javax.ws.rs.GET;
 import javax.ws.rs.Path;
 import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
+import javax.ws.rs.container.AsyncResponse;
+import javax.ws.rs.container.Suspended;
 import javax.ws.rs.core.Application;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
-import javax.ws.rs.container.AsyncResponse;
-import javax.ws.rs.container.Suspended;
+
+import org.eclipse.microprofile.opentracing.Traced;
 
 import io.opentracing.ActiveSpan;
 import io.opentracing.Span;
@@ -37,7 +39,7 @@ import io.opentracing.Tracer;
 @Path("testService") // 'SERVICE_PATH' in the constants
 public class FATOpentracingService extends Application implements FATOpentracingConstants {
     // Trace ...
-
+    
     private static final String CLASS_NAME = FATOpentracingService.class.getSimpleName();
 
     @SuppressWarnings("unused")
@@ -117,8 +119,11 @@ public class FATOpentracingService extends Application implements FATOpentracing
     /**
      * <p>Start a new child span of the active span.</p>
      *
-     * <p>The child span must be finish using {@link #finishChildSpan}
+     * <p>The child span must be finished using {@link #finishChildSpan}
      * before completing the service request which created the span.</p>
+     * 
+     * If there is no active span, the newly created span is made the
+     * active span.
      *
      * @param spanName The name to give the new child span.
      *
@@ -137,8 +142,13 @@ public class FATOpentracingService extends Application implements FATOpentracing
         } else {
             ActiveSpan activeSpan = useTracer.activeSpan();
             Tracer.SpanBuilder spanBuilder = useTracer.buildSpan(spanName);
-            spanBuilder.asChildOf( activeSpan.context() );
+            if (activeSpan != null) {
+                spanBuilder.asChildOf( activeSpan.context() );
+            }
             childSpan = spanBuilder.startManual();
+            if (activeSpan == null) {
+                useTracer.makeActive(childSpan);
+            }
         }
 
         traceReturn(methodName, "ChildSpan", childSpan);
@@ -219,7 +229,7 @@ public class FATOpentracingService extends Application implements FATOpentracing
         traceReturn("getManual", "ResponseText", responseText);
         return responseText;
     }
-
+    
     /**
      * <p>Service API: Handle a delayed GET.</p>
      *
@@ -242,14 +252,59 @@ public class FATOpentracingService extends Application implements FATOpentracing
         String methodName = "getDelayed";
         traceEnter(methodName, "Delay", Integer.valueOf(delay), "ResponseText", responseText);
 
-        Thread delayThread = new Thread(
-            delayResponse(asyncResponse,
-            delay * MSEC_IN_SEC,
-            responseText) );
+        try {
+            Thread.sleep(delay * MSEC_IN_SEC);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        
+        asyncResponse.resume(responseText);
 
-        delayThread.start();
-
+        // Current OT spec doesn't support AsyncResponse in a different thread.
+        // 
+        // Thread delayThread = new Thread(
+        //    delayResponse(asyncResponse,
+        //    delay * MSEC_IN_SEC,
+        //    responseText) );
+        // delayThread.start();
+        
         traceReturn(methodName);
+    }
+
+    /**
+     * <p>Create a runnable which waits a specified number of milliseconds
+     * then resumes the response using the specified text.</p>
+     *
+     * @param asyncResponse The response through which to resume the request.
+     * @param delayMS The delay amount in milliseconds.
+     * @param responseText Text used to resume the request.
+     *
+     * @return Runnable A new runnable used to delay responding to a request.
+     */
+    @SuppressWarnings("unused")
+    private static Runnable delayResponse(
+        final AsyncResponse asyncResponse,
+        final int delayMS,
+        final String responseText) {
+
+        return new Runnable() {
+            public void run() {
+                String methodName = "run";
+                innerTraceEnter(
+                    methodName,
+                    "Delay", Integer.valueOf(delayMS),
+                    "ReponseText", responseText);
+
+                try {
+                    Thread.sleep(delayMS);
+                    asyncResponse.resume(responseText);
+                } catch ( InterruptedException ex ) {
+                    throw new RuntimeException(ex);
+                }
+
+                innerTraceReturn(methodName);
+            }
+        };
     }
 
     // Delay utility ...
@@ -272,41 +327,6 @@ public class FATOpentracingService extends Application implements FATOpentracing
 
     protected static void innerTraceReturn(String methodName) {
         System.out.println(INNER_CLASS_NAME + "." + methodName + " RETURN");
-    }
-
-    /**
-     * <p>Create a runnable which waits a specified number of milliseconds
-     * then resumes the response using the specified text.</p>
-     *
-     * @param asyncResponse The response through which to resume the request.
-     * @param delayMS The delay amount in milliseconds.
-     * @param responseText Text used to resume the request.
-     *
-     * @return Runnable A new runnable used to delay responding to a request.
-     */
-    private static Runnable delayResponse(
-        final AsyncResponse asyncResponse,
-        final int delayMS,
-        final String responseText) {
-
-        return new Runnable() {
-            public void run() {
-                String methodName = "run";
-                innerTraceEnter(
-                    methodName,
-                    "Delay", Integer.valueOf(delayMS),
-                    "ReponseText", responseText);
-
-                try {
-                    Thread.sleep(delayMS);
-                    asyncResponse.resume(responseText);
-                } catch ( InterruptedException ex ) {
-                    // Do nothing
-                }
-
-                innerTraceReturn(methodName);
-            }
-        };
     }
 
     // Nested service API ... 'getNested'
@@ -401,7 +421,6 @@ public class FATOpentracingService extends Application implements FATOpentracing
                 // throws UnsupportedEncodingException
             String delay4Url = FATUtilsService.getRequestUrl(hostName, portNumber, delay4Path);
 
-
             Map<String, Object> delay6Parameters  = new HashMap<String, Object>();
             delay6Parameters.put(DELAY_PARAM_NAME, Integer.valueOf(6));
             delay6Parameters.put(RESPONSE_PARAM_NAME, responseText + " [ 6 ]");
@@ -450,5 +469,21 @@ public class FATOpentracingService extends Application implements FATOpentracing
 
         traceReturn(methodName, "FinalResponse", finalResponse);
         return finalResponse;
+    }
+
+    /**
+     * Simple endpoint that takes a {@code responseText} query parameter and
+     * returns its value as a plain/text response. This can be useful to vary
+     * different requests and test different exclude/include filters.
+     * @param responseText The text to return.
+     * @return {@code responseText}
+     */
+    @GET
+    @Path(GET_EXCLUDE_TEST_PATH)
+    @Produces(MediaType.TEXT_PLAIN)
+    public String excludeTest(@QueryParam(RESPONSE_PARAM_NAME) String responseText) {
+        String methodName = "excludeTest";
+        traceEnterReturn(methodName, "ResponseText", responseText);
+        return responseText;
     }
 }

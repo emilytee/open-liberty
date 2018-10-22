@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2008 IBM Corporation and others.
+ * Copyright (c) 1997, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -30,6 +30,7 @@ import javax.servlet.http.HttpUtils;
 
 import com.ibm.ejs.ras.TraceNLS;
 import com.ibm.websphere.servlet.error.ServletErrorReport;
+import com.ibm.ws.webcontainer.osgi.WebContainer;
 import com.ibm.ws.webcontainer.session.IHttpSessionContext;
 import com.ibm.ws.webcontainer.srt.SRTRequestContext;
 import com.ibm.ws.webcontainer.srt.SRTServletRequest;
@@ -80,13 +81,36 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
 
     private static final boolean removeServletPathSlash = WCCustomProperties.REMOVE_TRAILING_SERVLET_PATH_SLASH;
     private boolean possibleSlashStarMapping = true; //PK39337
+    
+    //4666
+    private static final String SET_SERVLET_PATH_FOR_DEFAULT_MAPPING = WCCustomProperties.SERVLET_PATH_FOR_DEFAULT_MAPPING;
+    private static boolean isServletPathForDefaultMapping = false;
+    static{
+        if (SET_SERVLET_PATH_FOR_DEFAULT_MAPPING == null){
+            if (WebContainer.getServletContainerSpecLevel() >= WebContainer.SPEC_LEVEL_40)
+                isServletPathForDefaultMapping = true;
+        }
+        else{
+            isServletPathForDefaultMapping =  Boolean.valueOf(SET_SERVLET_PATH_FOR_DEFAULT_MAPPING).booleanValue();
+        }
+        logger.logp(Level.FINE, CLASS_NAME,"static", "set servlet path for default mapping " + isServletPathForDefaultMapping);
+    }
+    //4666
 
     //other object not needing Cloning
     //========================
     protected WebApp _webapp;
 
     private DispatcherType dispatcherType = DispatcherType.REQUEST;
-
+    private boolean isNamedDispatcher = false;
+    
+    public void setNamedDispatcher(boolean b){
+        isNamedDispatcher = b;
+    }
+    
+    public boolean isNamedDispatcher(){
+        return isNamedDispatcher;
+    }
 
     /* (non-Javadoc)
      * @see com.ibm.ws.webcontainer.webapp.IWebAppDispatcherContext#setParentContext(com.ibm.ws.webcontainer.webapp.WebAppDispatcherContext)
@@ -440,7 +464,7 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
 
 
 
-    private WebAppDispatcherContext getParentContext() {
+    protected WebAppDispatcherContext getParentContext() {
         return this.parentContext;
     }
     /* (non-Javadoc)
@@ -904,10 +928,10 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
         ((SRTServletRequest)_request).resetPathElements();
 
         if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable (Level.FINE)) {    //PI67942
-            logger.logp(Level.FINE, CLASS_NAME,"setPathElements", "ervletPath = " + servletPath +", pathInfo = " + pathInfo +" : this = " + this);
+            logger.logp(Level.FINE, CLASS_NAME,"setPathElements", "servletPath = " + servletPath +", pathInfo = " + pathInfo +" : this = " + this);
         }
         //PK39337 - start
-        if (removeServletPathSlash) {
+        if (removeServletPathSlash || isServletPathForDefaultMapping) { //4666 preserve the old removeServletPathSlash in case of migration/upgrade.
 
             boolean hasSlashStar = false;
             boolean isPossible = isPossibleSlashStarMapping();
@@ -968,6 +992,10 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
         if (_pathInfo != null)
             relativeUri += _pathInfo;
         
+        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable (Level.FINE)) { 
+            logger.logp(Level.FINE, CLASS_NAME,"setPathElements", "returns with servletPath = " + _servletPath +", pathInfo = " + _pathInfo +" : this = " + this);
+        }
+        
     }
 
     /* (non-Javadoc)
@@ -984,6 +1012,11 @@ public abstract class WebAppDispatcherContext implements Cloneable, IWebAppDispa
     public boolean isInclude()
     {
         return (this.dispatcherType == DispatcherType.INCLUDE);
+    }
+    
+    public boolean isAsync() 
+    {
+        return (this.dispatcherType == DispatcherType.ASYNC);
     }
 
     /* (non-Javadoc)

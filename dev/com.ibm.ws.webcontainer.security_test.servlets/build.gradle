@@ -9,6 +9,14 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 
+plugins {
+  id "net.ossindex.audit" version "0.3.8-beta"
+}
+
+audit {
+    failOnError = true
+}
+
 apply plugin: 'war'
 
 /* 
@@ -823,3 +831,6 @@ assemble {
     webFragmentDeploymentFailureForUserDataConstraint
     
 }
+
+// We aren't making a war for the entire project
+war { enabled false }

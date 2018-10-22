@@ -61,7 +61,6 @@ import com.ibm.ws.Transaction.UOWCurrent;
 import com.ibm.ws.ffdc.FFDCFilter;
 import com.ibm.ws.javaee.dd.common.ResourceRef;
 import com.ibm.ws.jca.adapter.WSConnectionManager;
-import com.ibm.ws.kernel.service.util.PrivHelper;
 import com.ibm.ws.rsadapter.AdapterUtil;
 import com.ibm.ws.rsadapter.ConnectionSharing; 
 import com.ibm.ws.rsadapter.DSConfig;
@@ -353,6 +352,7 @@ public class WSJdbcConnection extends WSJdbcObject implements Connection {
         if (!managedConn.isTransactional()) {
             if (isTraceOn && tc.isEntryEnabled())
                 Tr.exit(this, tc, "beginTransactionIfNecessary", "no-op enlistment is disabled");
+              managedConn.enforceAutoCommit(autoCommit);  // PI90945
             return;
         }
         switch (managedConn.getTransactionState()) {
@@ -1363,7 +1363,7 @@ public class WSJdbcConnection extends WSJdbcObject implements Connection {
         if (tc.isDebugEnabled())
             Tr.debug(this, tc, "Create castable wrapper for", Arrays.toString(interfaceList));
 
-        Connection wrapper = (Connection) Proxy.newProxyInstance(PrivHelper.getClassLoader(connImpl.getClass()),
+        Connection wrapper = (Connection) Proxy.newProxyInstance(WSJdbcWrapper.priv.getClassLoader(connImpl.getClass()),
                                                                  interfaceList,
                                                                  this);
 

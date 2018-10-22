@@ -27,6 +27,8 @@ import java.util.TreeMap;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.websocket.Endpoint;
+import javax.websocket.EndpointConfig;
 import javax.websocket.Extension;
 import javax.websocket.Extension.Parameter;
 import javax.websocket.server.ServerEndpointConfig;
@@ -132,7 +134,16 @@ public class HandshakeProcessor {
         things.setQueryString(httpRequest.getQueryString());
         things.setURI(requestURI);
         things.setUserPrincipal(httpRequest.getUserPrincipal());
-        things.setSecure(httpRequest.isSecure());
+
+        boolean secure = httpRequest.isSecure();
+        if (!secure) {
+            String s = httpRequest.getAuthType();
+            if ((s != null) && (s.equalsIgnoreCase(HttpServletRequest.BASIC_AUTH))) {
+                secure = true;
+            }
+        }
+        things.setSecure(secure);
+
         things.setHttpSession(httpRequest.getSession());
 
         while (names.hasMoreElements()) {
@@ -179,8 +190,7 @@ public class HandshakeProcessor {
                 for (String val : list) {
                     if (headerSecWebSocketProtocol == null) {
                         headerSecWebSocketProtocol = val;
-                    }
-                    else {
+                    } else {
                         headerSecWebSocketProtocol = headerSecWebSocketProtocol + subProtocolDelimiter + val;
                     }
                 }
@@ -226,7 +236,7 @@ public class HandshakeProcessor {
         return endpointConfigurator.checkOrigin(headerOrigin);
     }
 
-    public void modifyHandshake() {
+    public void modifyHandshake(Endpoint _ep, EndpointConfig _epc) {
 
         Map<String, List<String>> responseHeaders = new TreeMap<String, List<String>>(String.CASE_INSENSITIVE_ORDER);
 
@@ -240,7 +250,7 @@ public class HandshakeProcessor {
         }
 
         // create handshake request object to give to modifier
-        HandshakeRequestExt handshakeRequest = new HandshakeRequestExt(httpRequest, requestHeaders, parameterMap, requestURI);
+        HandshakeRequestExt handshakeRequest = new HandshakeRequestExt(httpRequest, requestHeaders, parameterMap, requestURI, _ep, _epc);
 
         // create handshake response object to give to modifier
         HandshakeResponseExt handshakeResponse = new HandshakeResponseExt(responseHeaders);
@@ -265,8 +275,7 @@ public class HandshakeProcessor {
             for (int x = 0; x < list.size(); x++) {
                 if (x == 0) {
                     httpResponse.setHeader(entry.getKey(), list.get(x));
-                }
-                else {
+                } else {
                     httpResponse.addHeader(entry.getKey(), list.get(x));
                 }
             }
@@ -284,8 +293,7 @@ public class HandshakeProcessor {
         List<String> clientProtocols = null;
         if (clientSubProtocols == null) {
             clientProtocols = Collections.emptyList();
-        }
-        else {
+        } else {
             clientProtocols = Arrays.asList(clientSubProtocols);
         }
 
@@ -320,8 +328,7 @@ public class HandshakeProcessor {
                 for (Extension ext : agreedExtensions) {
                     if (first) {
                         first = false;
-                    }
-                    else {
+                    } else {
                         buf.append(", ");
                     }
                     buf.append(ext.getName());
@@ -348,8 +355,7 @@ public class HandshakeProcessor {
         String[] args = protocol.split("/");
         if (args.length < 2) {
             throw new Exception("Websocket request processed, but no HTTP Protocol version was provided..");
-        }
-        else {
+        } else {
             float version = Float.valueOf(args[1]);
             if (version < 1.1) {
                 throw new Exception("Websocket request processed, provided HTTP Protocol level \"" + protocol + "\"provided but WebSocket support requires HTTP/1.1 or above.");
@@ -380,8 +386,7 @@ public class HandshakeProcessor {
                 throw new Exception("Websocket request processed but provided connection header \"" + headerConnection + "\" does not match " + Constants.HEADER_VALUE_UPGRADE
                                     + ".");
             }
-        }
-        else {
+        } else {
             throw new Exception("Websocket request processed but provided connection header \"" + headerConnection + "\" does not match " + Constants.HEADER_VALUE_UPGRADE
                                 + ".");
         }
@@ -391,18 +396,15 @@ public class HandshakeProcessor {
         if (headerSecWebSocketVersion == null) {
             httpResponse.setIntHeader(Constants.HEADER_NAME_SEC_WEBSOCKET_VERSION, supportedVersion);
             throw new Exception("Websocket request processed, but no websocket version provided.");
-        }
-        else {
-            try
-            {
+        } else {
+            try {
                 int version = Integer.parseInt(headerSecWebSocketVersion);
                 if (version != supportedVersion) {
                     httpResponse.setIntHeader(Constants.HEADER_NAME_SEC_WEBSOCKET_VERSION, supportedVersion);
                     throw new Exception("Websocket request processed, but Version header of \"" + headerSecWebSocketVersion + "\" is not a match for supported version "
                                         + supportedVersion + ".");
                 }
-            } catch (NumberFormatException nfe)
-            {
+            } catch (NumberFormatException nfe) {
                 httpResponse.setIntHeader(Constants.HEADER_NAME_SEC_WEBSOCKET_VERSION, supportedVersion);
                 throw new Exception("Websocket request processed, but version header of \"" + headerSecWebSocketVersion + "\" is not valid number.", nfe);
             }
@@ -444,8 +446,7 @@ public class HandshakeProcessor {
         for (String val : list) {
             if (headerSecWebSocketExtensions == null) {
                 headerSecWebSocketExtensions = val;
-            }
-            else {
+            } else {
                 headerSecWebSocketExtensions = headerSecWebSocketExtensions + subProtocolDelimiter + val;
             }
         }

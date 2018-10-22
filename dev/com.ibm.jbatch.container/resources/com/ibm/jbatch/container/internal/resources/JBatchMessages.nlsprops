@@ -291,3 +291,34 @@ info.batch.events.publish.topic.useraction=The batch JMS topic root can be modif
 cdi.ambiguous.artifact.names=CWWKY0041W: The batch container is running with a CDI feature active, but the CDI engine was not able to load the batch artifact as a CDI-managed bean and perform other CDI injections. This problem might be caused by a missing bean-defining annotation such as @Dependent, an unintended bean discovery mode, or an ambiguous 'ref' value.
 cdi.ambiguous.artifact.names.explanation=When the batch runtime loads artifacts by using the CDI engine, the batch properties (@BatchProperty) and batch contexts (JobContext and StepContext) are injected, and the full capabilities of CDI are made available. These capabilities include the injection of other managed beans according to qualifiers and all other features of the CDI programming model. When the batch runtime loads artifacts without using the CDI engine, it only injects the batch properties and contexts. Because it is not a CDI-managed bean in this path, no other injections or other features of the CDI programming model are available within that batch artifact. This message indicates that although the server is configured so that the CDI feature is active, the batch artifact cannot be loaded as a CDI-managed bean because the 'ref' attribute value that corresponds to this artifact reference in XML does not point to a single, unambiguous CDI-managed bean.
 cdi.ambiguous.artifact.names.useraction=Add the @Dependent annotation or another suitable bean-defining annotation to your batch artifact. Alternatively, you can set bean discovery mode to 'all' in the beans.xml file, although this solution might slow down your application. If all of the ambiguous artifacts are not needed, you can also remove the ambiguous 'ref' attributes from the application so that only a single, unambiguous reference remains.
+
+#{0} job/flow/partition
+#{1} The JSL
+display.resolved.jsl=CWWKY0042I:  The resolved JSL for this {0} is \n {1}.
+display.resolved.jsl.explanation=The JSL used for the job, flow, or partition is displayed after parameters and properties are resolved.  The job JSL does not resolve partition plan properties.  Look for this message in the individual partition logs for partition plan property resolution.
+display.resolved.jsl.useraction=Verify the JSL and parameter resolution is as expected.
+
+#{0} The JSL
+display.unresolved.jsl=CWWKY0043I:  The unresolved JSL for this job is \n {0}.
+display.unresolved.jsl.explanation=The JSL used for the job is displayed before parameters and properties are resolved.
+display.unresolved.jsl.useraction=Ensure that the file name for the JSL is correct and verify that the source of the JSL contains the correct JSL.
+
+#The {0} operationGroup name was not resolved to a valid group name.
+JOB_GROUP_NAME_NOT_VALID=CWWKY0044W: The {0} operationGroup name was not resolved to a valid group name.
+JOB_GROUP_NAME_NOT_VALID.explanation=Attempts to access the job using group access might fail, if attempts to use an invalid group name occur.
+JOB_GROUP_NAME_NOT_VALID.useraction=Correct the group name in the server configuration file.
+
+#BATCH_TABLES_NOT_CURRENT=CWWKY0045W: The configured Java batch table {0} was not detected to be at the latest version {1}. The table was instead detected to have been created at version {2}. The createTables setting for the database store is set to {3}. 
+BATCH_TABLES_NOT_CURRENT=CWWKY0045W: The configured Java batch table {0} was not detected to be at the latest version {1}. The table was instead detected to have been created at version {2}. The createTables setting for the database store is set to {3}. 
+BATCH_TABLES_NOT_CURRENT.explanation=The specified Java batch runtime table was not detected to have been created at the latest version.
+BATCH_TABLES_NOT_CURRENT.useraction=Check the createTables setting for the database store. If the createTables setting is set to true then determine why the table auto-create failed to occur. If set to false, then the administrator (or DBA) should create the required table.
+
+#BATCH_TABLES_CURRENT=CWWKY0046I: The configured Java batch tables were detected to have been created at the latest table version.
+BATCH_TABLES_CURRENT=CWWKY0046I: The configured Java batch tables were detected to have been created at the latest table version.
+BATCH_TABLES_CURRENT.explanation=The configured Java batch tables were detected to have been created at the latest table version, either via auto-create or through an administrator manually creating.
+BATCH_TABLES_CURRENT.useraction=No action required.
+
+#BATCH_SECURITY_NOT_ACTIVE=CWWKY0047W: Security is not enabled in this server, Group Security associated with job instance {0} will not be enabled.
+BATCH_SECURITY_NOT_ACTIVE=CWWKY0047W: Security feature is not enabled in this server, Group Security associated with job instance {0} will not be enabled.
+BATCH_SECURITY_NOT_ACTIVE.explanation=Security is not enabled for this server, so the batch group security associations will not be persisted for the referenced job instance. This means batchGroupAdmin and batchGroupMonitor roles can not be used to gain authorization to operate on this job, now or at any point in the future. 
+BATCH_SECURITY_NOT_ACTIVE.useraction= If Java batch Group security enforcement is desired, enable Security for this server.

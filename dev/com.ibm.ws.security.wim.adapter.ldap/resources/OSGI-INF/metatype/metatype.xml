@@ -45,11 +45,14 @@
             required="false" type="Boolean" default="false"/>
         <AD id="reuseConnection" name="%reuseConnection" description="%reuseConnection.desc"
             required="false" type="Boolean" default="true"/>
+
+        <!-- 
+             SSL support.
+        -->
         <AD id="sslEnabled" name="%sslEnabled" description="%sslEnabled.desc"
             required="false" type="Boolean" default="false"/>
         <AD id="sslRef" name="%sslRef" description="%sslRef.desc"
             required="false" type="String"  ibm:type="pid"  ibm:reference="com.ibm.ws.ssl.repertoire" ibmui:uiReference="com.ibm.ws.ssl.repertoire" />
-            
         <AD id="SSLSupport.cardinality.minimum" name="internal" description="internal use only"
             type="String" default="${count(sslRef)}"/>
         <AD id="SSLSupport.target" name="internal" description="internal use only"
@@ -58,19 +61,37 @@
         <AD id="searchTimeout" name="%searchTimeout" description="%searchTimeout.desc"
             required="false" type="String" ibm:type="duration" default="1m"/>
         <AD id="searchCountLimit" name="internal" description="internal use only"
-            required="false" type="String"/> 
+            required="false" type="Integer"/>
+        <AD id="searchPageSize" name="internal" description="internal use only"
+            required="false" type="Integer"/>
         <AD id="connectTimeout" name="%connectTimeout" description="%connectTimeout.desc"
             required="false" type="String" ibm:type="duration" default="1m"/>
+        <AD id="readTimeout" name="%readTimeout" description="%readTimeout.desc"
+            required="false" type="String" ibm:type="duration" default="0m"/>
         <AD id="failoverServers" name="%ldap.failoverServers" description="%ldap.failoverServers.desc"
             ibm:flat="true" ibm:type="pid" ibm:reference="com.ibm.ws.security.registry.ldap.config.failoverServers"
             required="false" type="String" cardinality="2147483647" />
-        <AD id="certificateMapMode" name="%certificateMapMode" description="%certificateMapMode.desc"
-        	required="false" type="String">
-        	<Option label="%certificateMapMode.exact_dn" value="EXACT_DN"/>
-            <Option label="%certificateMapMode.certificate_filter" value="CERTIFICATE_FILTER"/>
-        </AD>
-        <AD id="certificateFilter" name="%certificateFilter" description="%certificateFilter.desc"
-            required="false" type="String"/>
+
+	    <!-- 
+	         X.509 certificate mapping 
+	    -->
+		<AD id="certificateMapMode" name="%certificateMapMode" description="%certificateMapMode.desc"
+			required="false" type="String" default="EXACT_DN">
+			<Option label="%certificateMapMode.exact_dn" value="EXACT_DN" />
+			<Option label="%certificateMapMode.certificate_filter" value="CERTIFICATE_FILTER" />
+			<Option label="%certificateMapMode.custom" value="CUSTOM" />
+			<Option label="%certificateMapMode.not.supported" value="NOT_SUPPORTED" />
+		</AD>
+		<AD id="certificateFilter" name="%certificateFilter" description="%certificateFilter.desc"
+		    required="false" type="String"/>
+		<AD id="certificateMapperId" name="%certificateMapperId" description="%certificateMapperId.desc"
+		    required="false" type="String"/>
+        <AD id="CertificateMapper.target" name="internal" description="internal use only"
+            type="String" default="(x509.certificate.mapper.id=${certificateMapperId})"/>
+            
+        <!-- 
+             LDAP filters by server type.
+        -->
         <AD id="activedFilters" name="%activedFilters" description="%activedFilters.desc"
             required="false" type="String" ibm:flat="true" ibm:type="pid" ibm:reference="com.ibm.ws.security.registry.ldap.internal.filters.actived"/>
         <AD id="customFilters" name="%customFilters" description="%customFilters.desc"
@@ -104,7 +125,7 @@
 		<!-- Made the plural ldapEntityTypes to ldapEntityType for consumability -->				
 		<AD id="ldapEntityType" name="%ldapEntityType" description="%ldapEntityType.desc"
 			  	required="false" type="String" cardinality="2147483347" ibm:flat="true"  ibm:type="pid" ibm:reference="com.ibm.ws.security.wim.adapter.ldap.entityType"/>
-		<AD id="groupProperties" name="internal" description="internal use only" 
+		<AD id="groupProperties" name="%groupProperties" description="%groupProperties.desc" 
 			    	required="false" type="String" ibm:flat="true"  ibm:type="pid" ibm:reference="com.ibm.ws.security.wim.adapter.ldap.groupConfiguration"/>
 		<AD id="attributeConfiguration" name="%attributeConfiguration" description="%attributeConfiguration.desc"
 		     	required="false" type="String" ibm:flat="true"  ibm:type="pid" ibm:reference="com.ibm.ws.security.wim.adapter.ldap.attributeConfiguration"/>
@@ -339,8 +360,6 @@
 		required="false" type="String" ibm:type="duration" default="1200s"/>
 	<AD id="sizeLimit" name="%sizeLimit" description="%sizeLimit.desc"
 		required="false" type="Integer" default="2000"/>
-	<AD id="serverTTLAttribute" name="%serverTTLAttribute" description="%serverTTLAttribute.desc"
-		required="false" type="String" />
 </OCD>
 <Designate factoryPid="com.ibm.ws.security.wim.adapter.ldap.attributeCache">
 	<Object ocdref="com.ibm.ws.security.wim.adapter.ldap.attributeCache"/>

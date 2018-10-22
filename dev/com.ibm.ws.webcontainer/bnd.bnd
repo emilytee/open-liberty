@@ -15,7 +15,7 @@ Bundle-Name: WAS WebContainer
 Bundle-SymbolicName: com.ibm.ws.webcontainer
 Bundle-Description: WAS WebContainer 8.0 with Servlet 3.0 support
 WLP-ServerName: IBM WebSphere Liberty
-WLP-ServerVersion: ${liberty.service.version}
+WLP-ServerVersion: ${libertyRelease}
 
 Service-Component: \
   com.ibm.ws.webcontainer.vhostmgr; \
@@ -93,7 +93,8 @@ Export-Package: !*.internal.*, \
     com.ibm.ws.webcontainer.webapp;provide:=true, \
     com.ibm.ws.webcontainer.upgrade*, \
     com.ibm.ws.webcontainer.servlet, \
-    com.ibm.ws.webcontainer.spiadapter.collaborator
+    com.ibm.ws.webcontainer.spiadapter.collaborator, \
+    com.ibm.ws.container
     
 Private-Package: \
 	com.ibm.websphere.csi, \
@@ -101,7 +102,6 @@ Private-Package: \
 	com.ibm.ejs.j2c, \
 	com.ibm.servlet.util, \
 	com.ibm.ws.app.framework.webcontainer.internal*, \
-	com.ibm.ws.container, \
 	com.ibm.ws.http, \
 	com.ibm.ws.webcontainer.osgi.container*, \
 	com.ibm.ws.webcontainer.osgi*, \
@@ -139,8 +139,6 @@ Import-Package: \
     com.ibm.websphere.security, \
     com.ibm.ws.container.service.app.deploy, \
     com.ibm.ws.genericbnf, \
-    org.apache.commons.fileupload*;version=1.2.1;packageType="was_internal", \
-    org.apache.commons.io*;version=1.4;packageType="was_internal", \
      !com.ibm.wsspi.buffermgmt, \
      !com.ibm.ejs.sm.client.ui, \
      !com.ibm.websphere.monitor.jmx, \
@@ -196,9 +194,9 @@ instrument.disabled: true
 	com.ibm.ws.javaee.version;version=latest,\
 	com.ibm.websphere.javaee.annotation.1.1;version=latest,\
 	com.ibm.ws.session;version=latest,\
-	com.ibm.ws.org.apache.commons.fileupload.1.2.1;version=latest,\
+	com.ibm.ws.org.apache.commons.fileupload;version=latest,\
 	com.ibm.ws.webserver.plugin.runtime.interfaces;version=latest,\
-	com.ibm.ws.org.apache.commons.io.2.4;version=latest, \
+	com.ibm.ws.org.apache.commons.io;version=latest, \
 	com.ibm.ws.org.osgi.annotation.versioning;version=latest
 
 -testpath: \
@@ -206,9 +204,9 @@ instrument.disabled: true
 	org.jmock:jmock;strategy=exact;version=2.5.1, \
 	org.jmock:jmock-junit4;strategy=exact;version=2.5.1, \
 	../build.sharedResources/lib/junit/old/junit.jar;version=file, \
-	../build.sharedResources/lib/ws-junit/ws-junit.jar;version=file, \
+	com.ibm.ws.junit.extensions;version=latest, \
 	org.jmock:jmock-legacy;version=2.5.0, \
 	com.ibm.ws.org.objenesis:objenesis;version=1.0, \
-	cglib:cglib-nodep;version=2.1.0.3, \
+	cglib:cglib-nodep;version=3.2.7, \
 	com.ibm.ws.kernel.boot;version=latest, \
 	com.ibm.ws.javaee.ddmodel;version=latest

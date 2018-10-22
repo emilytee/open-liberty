@@ -34,6 +34,7 @@ import com.ibm.ws.kernel.boot.internal.BootstrapConstants.VerifyServer;
 import com.ibm.ws.kernel.boot.internal.FileUtils;
 import com.ibm.ws.kernel.boot.internal.KernelResolver;
 import com.ibm.ws.kernel.boot.internal.KernelUtils;
+import com.ibm.ws.kernel.boot.internal.PasswordGenerator;
 import com.ibm.ws.kernel.boot.internal.ServerLock;
 
 /**
@@ -810,6 +811,7 @@ public class BootstrapConfig {
             return;
         }
 
+        boolean generatePassword = createOptions == null || createOptions.getOption("no-password") == null;
         if (!configDir.exists()) {
             if (verifyServer == VerifyServer.CREATE ||
                 (verifyServer == VerifyServer.CREATE_DEFAULT && getDefaultProcessName().equals(processName))) {
@@ -828,7 +830,7 @@ public class BootstrapConfig {
                 if (configDir.mkdirs()) {
                     try {
                         createConfigDirectory(template);
-                        disablePermGenIfNecessary();
+                        generateServerEnv(generatePassword);
                     } catch (IOException e) {
                         throw new LocationException("Error occurred while trying to create new process "
                                                     + processName, MessageFormat.format(BootstrapConstants.messages.getString(getErrorCreatingNewProcessMessageKey()), processName,
@@ -880,7 +882,7 @@ public class BootstrapConfig {
             if (!f.exists() && (verifyServer == VerifyServer.CREATE_DEFAULT && getDefaultProcessName().equals(processName))) {
                 try {
                     createConfigDirectory(findProcessTemplate(null));
-                    disablePermGenIfNecessary();
+                    generateServerEnv(generatePassword);
                 } catch (IOException e) {
                     // We can ignore this because a message will be output in a moment.
                 }
@@ -1140,7 +1142,7 @@ public class BootstrapConfig {
      * @param bootProps
      * @return
      */
-    protected ReturnCode disablePermGenIfNecessary() {
+    protected ReturnCode generateServerEnv(boolean generatePassword) {
         double jvmLevel;
         String s = null;
         try {
@@ -1159,23 +1161,36 @@ public class BootstrapConfig {
                                                                                                        s), ex, ReturnCode.ERROR_BAD_JAVA_VERSION);
         }
 
-        if (jvmLevel >= 1.8) {
-            BufferedWriter bw = null;
-            File serverEnv = getConfigFile("server.env");
-            try {
-                if (serverEnv.exists())
-                    FileUtils.appendFile(serverEnv, new ByteArrayInputStream((System.getProperty("line.separator") + "WLP_SKIP_MAXPERMSIZE=true").getBytes("UTF-8")));
-                else
-                    FileUtils.createFile(serverEnv, new ByteArrayInputStream("WLP_SKIP_MAXPERMSIZE=true".getBytes("UTF-8")));
-            } catch (IOException ex) {
-                throw new LaunchException("Failed to create/update the server.env file for this server", MessageFormat.format(BootstrapConstants.messages.getString("error.create.java8serverenv"),
-                                                                                                                              serverEnv.getAbsolutePath()), ex, ReturnCode.LAUNCH_EXCEPTION);
-            } finally {
-                if (bw != null) {
-                    try {
-                        bw.close();
-                    } catch (IOException ex) {
-                    }
+        BufferedWriter bw = null;
+        File serverEnv = getConfigFile("server.env");
+        try {
+            char[] keystorePass = PasswordGenerator.generateRandom();
+            String serverEnvContents = FileUtils.readFile(serverEnv);
+            String toWrite = "";
+            if (generatePassword && (serverEnvContents == null || !serverEnvContents.contains("keystore_password="))) {
+                if (serverEnvContents != null)
+                    toWrite += System.getProperty("line.separator");
+                toWrite += "keystore_password=" + new String(keystorePass);
+            }
+            if (jvmLevel >= 1.8 && (serverEnvContents == null || !serverEnvContents.contains("WLP_SKIP_MAXPERMSIZE="))) {
+                if (serverEnvContents != null || !toWrite.isEmpty())
+                    toWrite += System.getProperty("line.separator");
+                toWrite += "WLP_SKIP_MAXPERMSIZE=true";
+            }
+
+            if (serverEnvContents == null)
+                FileUtils.createFile(serverEnv, new ByteArrayInputStream(toWrite.getBytes("UTF-8")));
+            else
+                FileUtils.appendFile(serverEnv, new ByteArrayInputStream(toWrite.getBytes("UTF-8")));
+
+        } catch (IOException ex) {
+            throw new LaunchException("Failed to create/update the server.env file for this server", MessageFormat.format(BootstrapConstants.messages.getString("error.create.java8serverenv"),
+                                                                                                                          serverEnv.getAbsolutePath()), ex, ReturnCode.LAUNCH_EXCEPTION);
+        } finally {
+            if (bw != null) {
+                try {
+                    bw.close();
+                } catch (IOException ex) {
                 }
             }
         }

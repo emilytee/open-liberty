@@ -10,90 +10,264 @@
  *******************************************************************************/
 
 import org.apache.tools.ant.filters.ReplaceTokens
-import groovy.json.*
 
-// Set the generated zip version to the buildID.
-// tasks.gradle file where this task is defined
-// can't see the bnd property because it isn't
-// a bundle.
-def releaseVersion = bnd.buildID
-if (releaseVersionOverride != null) {
-    releaseVersion = releaseVersionOverride
+task copyPropertiesToBuildImage (type:Copy) {
+    dependsOn jar
+    from project.file('publish')
+    into project.file('wlp/lib/versions')
+    include '*.properties'
+    filter(ReplaceTokens,
+           tokens: [PRODUCT_VERSION: bnd.libertyRelease, PRODUCT_EDITION: bnd.productEdition, PRODUCT_LICENSE_TYPE: bnd.productLicenseType])
 }
 
-String packageDir = "${buildDir}/openliberty"
+task copyReadmeToBuildImage (type:Copy) {
+    dependsOn jar
+    from project.file('publish')
+    into project.file('wlp')
+    include 'README.TXT'
+    filter(ReplaceTokens,
+           tokens: [BUILD_ID: bnd.buildID, LIBERTY_VERSION: bnd.libertyRelease])
+}
 
-task packageOpenLiberty {
-    dependsOn parent.subprojects.assemble
-    doLast {
+task copyLicenseToBuildImage (type:Copy) {
+    dependsOn jar
+    from project.file('publish')
+    into project.file('wlp')
+    include 'LICENSE'
+    include 'NOTICES'
+    filter(ReplaceTokens,
+           tokens: [BUILD_ID: bnd.buildID, LIBERTY_VERSION: bnd.libertyRelease])
+}
+
+task copySwidTagToBuildImage (type:Copy) {
+    dependsOn jar
+    from project.file('publish')
+    into project.file('wlp/lib/versions/tags')
+    include 'openliberty.io_OpenLiberty.swidtag'
+    filter(ReplaceTokens,
+           tokens: [ VERSION: bnd.libertyRelease ])
+}
+
+assemble {
+    dependsOn copyPropertiesToBuildImage
+    dependsOn copyReadmeToBuildImage
+    dependsOn copyLicenseToBuildImage
+    dependsOn copySwidTagToBuildImage
+}
+
+import groovy.json.*
+import org.gradle.internal.os.OperatingSystem
+
+
+
+File packageDir = new File(project.buildDir, 'openliberty')
+def props = new Properties()
+rootProject.file('generated.properties').withInputStream { props.load(it) }
+
+// Set the generated zip version to the product version and the
+// version qualifier to be consistent
+// with what is used for the individual Bundle-Versions
+// as well as the server version output.
+def releaseVersion = "${bnd.libertyRelease}-" + props.getProperty("version.qualifier")
+
+class PackageLibertyWithFeatures extends DefaultTask {
+    Closure withFeatures
+    File outputTo
+
+    @TaskAction
+    void buildPackage() {
         // Create server in order to minify an image that only includes kind=ga features
-        String serverName = "packageOpenLiberty"
-        delete "${projectDir}/wlp/usr/servers/${serverName}"
-        if (System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')) {
-           exec {
-              workingDir "${projectDir}/wlp/bin"
-              commandLine "cmd", "/c", "server", "create", serverName
-           }
-        } else {
-            exec {
-              workingDir "${projectDir}/wlp/bin"
-              commandLine "./server", "create", serverName
+        project.delete project.file('wlp/usr/servers/packageOpenLiberty')
+        project.exec {
+            workingDir project.file('wlp/bin')
+            def args = ["create", "packageOpenLiberty"]
+            if (OperatingSystem.current().windows) {
+                commandLine = ["cmd", "/c", "server"] + args
+            } else {
+                commandLine = ["./server"] + args
             }
         }
 
         try {
-            String features = ""
-            fileTree(dir: "${rootDir}", include: '*/*.feature').visit { element ->
-                if (element.isDirectory()) {
-                    return
-                }
-
-                File featureFile = element.getFile()
-                if (featureFile.text.contains("kind=ga")) {
-                    for (String line : featureFile.text.split("\\n")) {
-                        if (line.contains("IBM-ShortName:")) {
-                            String shortname = line.substring(14)
-                            shortname = shortname.replaceAll("\\s+", "")
-                            features += "\n<feature>" + shortname + "</feature>"
-                            break
-                        }
-                    }
-                }
-            }
-
-            def serverXml = file("${projectDir}/wlp/usr/servers/${serverName}/server.xml")
+            def serverXml = project.file("wlp/usr/servers/packageOpenLiberty/server.xml")
             serverXml.text = """<?xml version="1.0" encoding="UTF-8"?>
 <server description="new server">
-<featureManager>${features}
-</featureManager>
+    <featureManager>${withFeatures()}
+    </featureManager>
 </server>
 """
 
-            String archive = "${buildDir}/openliberty.zip"
-            delete archive
-            if (System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')) {
-            exec {
-              workingDir "${projectDir}/wlp/bin"
-              commandLine "cmd", "/c", "server", "package", serverName, "--archive=${archive}", "--include=minify"
-            }
-            } else {
-              exec {
-                 workingDir "${projectDir}/wlp/bin"
-                 commandLine "./server", "package", serverName, "--archive=${archive}", "--include=minify"
-              }
+            File archive = new File(project.buildDir, 'openliberty.zip')
+            project.delete archive
+            project.exec {
+                workingDir project.file('wlp/bin')
+                def args = ["package", "packageOpenLiberty", "--archive=${archive}", "--include=minify"]
+                if (OperatingSystem.current().windows) {
+                    commandLine = ["cmd", "/c", "server"] + args
+                } else {
+                    commandLine = ["./server"] + args
+                }
             }
 
             // Postprocess to remove unwanted files
-            delete packageDir
-            copy {
-                from(zipTree(file(archive)))
+            project.delete outputTo
+            project.copy {
+                from project.zipTree(project.file(archive))
                 exclude 'wlp/usr/servers/**'
                 exclude 'wlp/lib/versions/package_*'
-                into packageDir
+                into outputTo
             }
 
-        } finally {
-            delete "${projectDir}/wlp/usr/servers/${serverName}"
+            //Now add the NOTICES and LICENSE files
+            project.copy {
+                from project.file('publish')
+                include 'LICENSE'
+                include 'NOTICES'
+                into "$outputTo/wlp"
+            }
+
+        } catch (all) {
+            println "-- EXCEPTION PACKAGING SERVER --"
+            println all
+            def messages = project.file("wlp/usr/servers/packageOpenLiberty/logs/messages.log")
+            if (messages.exists()) {
+                messages.eachLine { String line ->
+                    println line
+                }
+            }
+        }
+    }
+}
+
+def gaPublicFeatures() {
+    String features = ""
+    gaFeatures(true).each {
+        features += '<feature>' + it + '</feature>\n'
+    }
+    features
+}
+
+def webProfile8Features() {
+    String features = project.file('profiles/webProfile8/features.xml').readLines()
+    features
+}
+
+def javaee8Features() {
+    String features = project.file('profiles/javaee8/features.xml').readLines()
+    features
+}
+
+def microProfile2Features() {
+    String features = project.file('profiles/microProfile2/features.xml').readLines()
+    features
+}
+
+task packageOpenLiberty(type: PackageLibertyWithFeatures) {
+    enabled props["ghe.build.type"] == null || !props["ghe.build.type"].contains("ifix")
+    dependsOn parent.subprojects.assemble
+    dependsOn ':com.ibm.websphere.appserver.features:publishFeatureResources'
+    withFeatures this.&gaPublicFeatures
+    outputTo packageDir
+}
+
+task packageOpenLibertyKernel(type: PackageLibertyWithFeatures) {
+    enabled props["ghe.build.type"] == null || !props["ghe.build.type"].contains("ifix")
+    dependsOn parent.subprojects.assemble
+    dependsOn ':com.ibm.websphere.appserver.features:publishFeatureResources'
+    withFeatures { '' }
+    outputTo packageDir
+}
+
+def removeFeature(feature) {
+    def file = new File("$projectDir/wlp/lib/features/com.ibm.websphere.appserver." + feature + ".mf")
+    file.renameTo(new File("$projectDir/wlp/lib/features/com.ibm.websphere.appserver." + feature + ".mf.bak"))
+}
+
+def restoreFeature(feature) {
+    def file = new File("$projectDir/wlp/lib/features/com.ibm.websphere.appserver." + feature + ".mf.bak")
+    file.renameTo(new File("$projectDir/wlp/lib/features/com.ibm.websphere.appserver." + feature + ".mf"))
+}
+
+def excludedFeatures = ['cdi-1.2',
+                        'jsonp-1.0',
+                        'jaxrs-2.0',
+                        'jdbc-4.0',
+                        'jdbc-4.1',
+                        'jaxrsClient-2.0',
+                        'servlet-3.1']
+
+task packageOpenLibertyWebProfile8(type: PackageLibertyWithFeatures) {
+    doFirst {
+        excludedFeatures.each {
+            this.&removeFeature("${it}")
+        }
+    }
+    enabled props["ghe.build.type"] == null || !props["ghe.build.type"].contains("ifix")
+    dependsOn parent.subprojects.assemble
+    dependsOn ':com.ibm.websphere.appserver.features:publishFeatureResources'
+    withFeatures this.&webProfile8Features
+    outputTo packageDir
+    doLast {
+        copy {
+            from "$packageDir/wlp/templates/servers/webProfile8/server.xml" 
+            into "$packageDir/wlp/templates/servers/defaultServer" 
+        }
+        copy {
+            from "$packageDir/wlp/templates/clients/javaeeClient8/client.xml"
+            into "$packageDir/wlp/templates/clients/defaultClient" 
+        }
+        excludedFeatures.each {
+            this.&restoreFeature("${it}")
+        }
+    }
+}
+
+task packageOpenLibertyJavaee8(type: PackageLibertyWithFeatures) {
+    doFirst {
+        excludedFeatures.each {
+            this.&removeFeature("${it}")
+        }
+    }
+
+    enabled props["ghe.build.type"] == null || !props["ghe.build.type"].contains("ifix")
+    dependsOn parent.subprojects.assemble
+    dependsOn ':com.ibm.websphere.appserver.features:publishFeatureResources'
+    withFeatures this.&javaee8Features
+    outputTo packageDir
+    doLast {
+        copy {
+            from "$packageDir/wlp/templates/servers/javaee8/server.xml" 
+            into "$packageDir/wlp/templates/servers/defaultServer" 
+        }
+        copy {
+            from "$packageDir/wlp/templates/clients/javaeeClient8/client.xml"
+            into "$packageDir/wlp/templates/clients/defaultClient" 
+        }
+        excludedFeatures.each {
+            this.&restoreFeature("${it}")
+        }
+    }
+}
+
+task packageOpenLibertyMicroProfile2(type: PackageLibertyWithFeatures) {
+    doFirst {
+        excludedFeatures.each {
+            this.&removeFeature("${it}")
+        }
+    }
+
+    enabled props["ghe.build.type"] == null || !props["ghe.build.type"].contains("ifix")
+    dependsOn parent.subprojects.assemble
+    dependsOn ':com.ibm.websphere.appserver.features:publishFeatureResources'
+    withFeatures this.&microProfile2Features
+    outputTo packageDir
+    doLast {
+        copy {
+            from "$packageDir/wlp/templates/servers/microProfile2/server.xml" 
+            into "$packageDir/wlp/templates/servers/defaultServer" 
+        }
+        excludedFeatures.each {
+            this.&restoreFeature("${it}")
         }
     }
 }
@@ -108,64 +282,59 @@ task zipOpenLiberty(type: Zip) {
 }
 publish.dependsOn zipOpenLiberty
 
+// Includes only kind=ga features.
+task zipOpenLibertyKernel(type: Zip) {
+    dependsOn packageOpenLibertyKernel
+    baseName 'openliberty-kernel'
+    from packageDir
+    destinationDir distsDir
+    version releaseVersion
+}
+publish.dependsOn zipOpenLibertyKernel
+
+// Includes only kind=ga features.
+task zipOpenLibertyWebProfile8(type: Zip) {
+    dependsOn packageOpenLibertyWebProfile8
+    baseName 'openliberty-webProfile8'
+    from packageDir
+    destinationDir distsDir
+    version releaseVersion
+}
+publish.dependsOn zipOpenLibertyWebProfile8
+
+// Includes only kind=ga features.
+task zipOpenLibertyJavaee8(type: Zip) {
+    dependsOn packageOpenLibertyJavaee8
+    baseName 'openliberty-javaee8'
+    from packageDir
+    destinationDir distsDir
+    version releaseVersion
+}
+publish.dependsOn zipOpenLibertyJavaee8
+
+task zipOpenLibertyMicroProfile2(type: Zip) {
+    dependsOn packageOpenLibertyMicroProfile2
+    baseName 'openliberty-microProfile2'
+    from packageDir
+    destinationDir distsDir
+    version releaseVersion
+}
+publish.dependsOn zipOpenLibertyMicroProfile2
+
 // Includes all features.
 task zipOpenLibertyAll(type: Zip) {
     dependsOn parent.subprojects.assemble
+    dependsOn ':com.ibm.websphere.appserver.features:publishFeatureResources'
     baseName 'openliberty-all'
     from projectDir
     include 'wlp/**'
     destinationDir distsDir
     version releaseVersion
     doLast {
-        def props = new Properties()
-        file("${rootDir}/generated.properties").withInputStream { props.load(it) }
-
         props.setProperty('zipopenliberty.archivename', archivePath.toString())
-
-        File propsFile = new File("${rootDir}/generated.properties")
+        File propsFile = rootProject.file('generated.properties')
         props.store(propsFile.newWriter(), null)
     }
-}
-
-task copyPropertiesToBuildImage (type:Copy) {
-    dependsOn jar
-    from "${projectDir}/publish/"
-    into "${projectDir}/wlp/lib/versions/"
-    include '*.properties'
-    filter(ReplaceTokens,
-           tokens: [PRODUCT_VERSION: bnd.libertyRelease, PRODUCT_EDITION: bnd.productEdition, PRODUCT_LICENSE_TYPE: bnd.productLicenseType])
-}
-
-task copyReadmeToBuildImage (type:Copy) {
-    dependsOn jar
-    from "${projectDir}/publish/"
-    into "${projectDir}/wlp/"
-    include 'README.TXT'
-    filter(ReplaceTokens,
-           tokens: [BUILD_ID: bnd.buildID, LIBERTY_VERSION: bnd.libertyRelease])
-}
-
-task copyGeneratedToBuildImageBinTools (type:Copy) {
-    dependsOn jar
-    from "${projectDir}/wlp/lib/"
-    into "${projectDir}/wlp/bin/tools/"
-    include 'bootstrap-agent.jar'
-    rename 'bootstrap-agent.jar', 'ws-javaagent.jar'
-}
-
-task copyGeneratedToCnfLib (type:Copy) {
-    dependsOn jar
-    from "${projectDir}/wlp/dev/api/spec/"
-    into "${rootDir}/${bnd_cnf}/lib/"
-    include 'com.ibm.ws.org.osgi.core.6.0.0_*.jar'
-    rename '.*.jar', 'osgi.core.jar'
-}
-
-assemble {
-    dependsOn copyPropertiesToBuildImage
-    dependsOn copyReadmeToBuildImage
-    dependsOn copyGeneratedToBuildImageBinTools
-    dependsOn copyGeneratedToCnfLib
 }
 
 clean.doLast {
@@ -187,10 +356,6 @@ task createJSONForPublicArtifacts {
     enabled isAutomatedBuild
 
     doLast {
-        def props = new Properties()
-        file("${rootDir}/generated.properties").withInputStream { props.load(it) }
-
-        // Create JSON descriptor
         delete "${buildDir}/info.json"
         File json = new File("${buildDir}/info.json")
         json.createNewFile()
@@ -209,8 +374,19 @@ task createJSONForPublicArtifacts {
         String junitPath = props.getProperty("junit.report.zip")
         String logPath = props.getProperty("published.gradle.log")
         String driverLocation = props.getProperty("zipopenliberty.archivename")
-        assert junitPath != null
-        assert logPath != null
+
+        if (junitPath == null) {
+            raise InvalidUserDataException("Could not find property named 'junit.report.zip'")
+        }
+
+        if (logPath == null) {
+            raise InvalidUserDataException("Could not find property named 'published.gradle.log'")
+        }
+
+        if (driverLocation == null) {
+            raise InvalidUserDataException("Could not find property named 'zipopenliberty.archivename'")
+        }
+
         String testResultName = new File(junitPath).getName()
         String logName = new File(logPath).getName()
         String driverLocationName = new File(driverLocation).getName()
@@ -229,7 +405,6 @@ task createJSONForPublicArtifacts {
 
         props.setProperty('published.json', json.toString())
 
-        // Store props to file
         File propsFile = new File('generated.properties')
         props.store(propsFile.newWriter(), null)
     }
@@ -237,15 +412,13 @@ task createJSONForPublicArtifacts {
 
 buildscript {
     repositories {
-        def props = new Properties()
-        file("${rootDir}/generated.properties").withInputStream { props.load(it) }
-        if (usrHomeProps.exists() && !props.getProperty('artifactory.force.external.repo')) {
+        if (isUsingArtifactory) {
             maven {
                 credentials {
-                    username props.getProperty("artifactory.download.user")
-                    password props.getProperty("artifactory.download.token")
+                    username userProps.getProperty("artifactory.download.user")
+                    password userProps.getProperty("artifactory.download.token")
                 }
-                url ("https://" + props.getProperty("artifactory.download.server") + "/artifactory/wasliberty-open-liberty")
+                url ("https://" + userProps.getProperty("artifactory.download.server") + "/artifactory/wasliberty-open-liberty")
             }
         } else {
             jcenter()
@@ -263,9 +436,6 @@ apply plugin: 'org.hidetake.ssh'
 
 remotes {
     dhe {
-        def props = new Properties()
-        file("${rootDir}/generated.properties").withInputStream { props.load(it) }
-
         host = props.getProperty("dhe.server")
         user = props.getProperty("dhe.user")
         password = props.getProperty("dhe.password")
@@ -283,9 +453,6 @@ task publishPublicArtifactsOnDhe {
     enabled isAutomatedBuild && isPublicPublishing
 
     doLast {
-        def props = new Properties()
-        file("${rootDir}/generated.properties").withInputStream { props.load(it) }
-
         // Re-arrange buildLabel, ex: 201708101600 to 2017-08-10_1600
         def (yr, mo, d, t) = [bnd.buildLabel.substring(0,4), bnd.buildLabel.substring(4,6), bnd.buildLabel.substring(6,8), bnd.buildLabel.substring(8)]
         String version = "${yr}-${mo}-${d}_${t}"
@@ -358,46 +525,6 @@ task publishPublicArtifactsOnDhe {
                     put from: "${buildDir}/info.json", into: "${dir}/${packageName}/"
                 }
             }
-        }
-    }
-}
-
-task publishPublicArtifactsOnBintray {
-    dependsOn createJSONForPublicArtifacts
-    enabled isAutomatedBuild && isPublicPublishing
-
-    doLast {
-        def props = new Properties()
-        file("${rootDir}/generated.properties").withInputStream { props.load(it) }
-
-        String bintrayUser = props.getProperty("bintray.user")
-        String bintrayApikey = props.getProperty("bintray.apikey")
-
-        // Re-arrange buildLabel, ex: 201708101600 to 2017-08-10_1600
-        def (yr, mo, d, t) = [bnd.buildLabel.substring(0,4), bnd.buildLabel.substring(4,6), bnd.buildLabel.substring(6,8), bnd.buildLabel.substring(8)]
-        String version = "${yr}-${mo}-${d}_${t}"
-        String packageName = (isRelease ? props.getProperty("published.package.release") : props.getProperty("published.package.nightly"))
-        String bintrayREST = "https://api.bintray.com/content/" + props.getProperty("bintray.organization") + "/" + props.getProperty("bintray.repository") + "/${packageName}/${version}/"
-
-        // Upload files using REST API https://api.bintray.com/content/:subject/:repo/:package/:version/${packageName}/${version}
-        exec {
-            commandLine "curl", "-T", props.getProperty("published.json"), "-u${bintrayUser}:${bintrayApikey}", bintrayREST + "${packageName}/${version}/"
-        }
-        exec {
-            commandLine "curl", "-T", props.getProperty("published.gradle.log"), "-u${bintrayUser}:${bintrayApikey}", bintrayREST + "${packageName}/${version}/"
-        }
-        exec {
-            commandLine "curl", "-T", props.getProperty("junit.report.zip"), "-u${bintrayUser}:${bintrayApikey}", bintrayREST + "${packageName}/${version}/"
-        }
-        if (isContinuousBuild || isRelease) {
-            exec {
-                commandLine "curl", "-T", props.getProperty("zipopenliberty.archivename"), "-u${bintrayUser}:${bintrayApikey}", bintrayREST + "${packageName}/${version}/"
-            }
-        }
-
-        // Publish using REST API https://api.bintray.com/content/:subject/:repo/:package/:version/publish
-        exec {
-            commandLine "curl", "-X", "POST", "-u${bintrayUser}:${bintrayApikey}", bintrayREST + "publish"
         }
     }
 }

@@ -13,7 +13,6 @@ bVersion=1.0
 
 src: \
 	fat/src,\
-	test-applications/customAppJSONPProvider.jar/src,\
 	test-applications/customAppJSONPWAR.war/src,\
 	test-applications/customFeatureJSONPWAR.war/src,\
 	test-applications/customLibJSONPProvider.jar/src,\
@@ -21,7 +20,7 @@ src: \
 	test-applications/JSONPWAR.war/src,\
 	test-bundles/custom.jsonp/src
 
-test.project: true
+fat.project: true
 
 -sub: *.bnd
 

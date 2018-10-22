@@ -77,7 +77,9 @@ public class Node {
         // mainline debug in this recursive method is way to verbose, so only debug when we find what we are looking for
 
         if (nodeStreamID == this.streamID) {
-            Tr.debug(tc, "findNode exit: bottom of recursion, found node: " + this);
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "findNode exit: bottom of recursion, found node: " + this);
+            }
             return this;
         } else {
             Iterator<Node> iter = dependents.iterator();
@@ -115,6 +117,10 @@ public class Node {
             Tr.debug(tc, "removeDependent entry: node to remove: " + nodeToRemove);
         }
         dependents.remove(nodeToRemove);
+    }
+
+    protected void clearDependents() {
+        dependents = new ArrayList<Node>();
     }
 
     /**
@@ -321,7 +327,7 @@ public class Node {
      *
      * @param newParent The new parent for this node. Null is allowed is is basically removing this node from the tree.
      */
-    protected void setParent(Node newParent) {
+    protected void setParent(Node newParent, boolean removeDep) {
 
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
             Tr.debug(tc, "setParent entry: new parent will be: " + newParent + " for node: " + this);
@@ -334,9 +340,18 @@ public class Node {
             parent.addDependent(this);
         }
 
-        // remove this node from the old parents list of dependents.
-        if (oldParent != null) {
-            oldParent.removeDependent(this);
+        // removing dependents can cause ConcurrentModificationException if calling is iterating over a list of dependent nodes
+        // therefore removeDep should be false if setParent is being called while iterating or looping over a list of
+        // dependent nodes.
+        if (removeDep) {
+            // remove this node from the old parents list of dependents.
+            if (oldParent != null) {
+                if (newParent == null) {
+                    oldParent.removeDependent(this);
+                } else if (oldParent.getStreamID() != parent.getStreamID()) {
+                    oldParent.removeDependent(this);
+                }
+            }
         }
     }
 

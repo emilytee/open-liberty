@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2013 IBM Corporation and others.
+ * Copyright (c) 2011, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -12,16 +12,19 @@
 package com.ibm.ws.webcontainer.security;
 
 import java.io.IOException;
+import java.security.AccessController;
 import java.security.Principal;
+import java.security.PrivilegedAction;
 import java.util.Enumeration;
 import java.util.Set;
 
 import javax.security.auth.Subject;
 import javax.servlet.ServletException;
-import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
+
+import javax.servlet.http.Cookie;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
@@ -49,6 +52,9 @@ import com.ibm.ws.webcontainer.webapp.WebApp;
 import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 import com.ibm.wsspi.kernel.service.utils.ConcurrentServiceReferenceMap;
 import com.ibm.wsspi.webcontainer.webapp.IWebAppDispatcherContext;
+
+import com.ibm.websphere.security.web.PasswordExpiredException;
+import com.ibm.websphere.security.web.UserRevokedException;
 
 public class AuthenticateApi {
     private static final TraceComponent tc = Tr.register(AuthenticateApi.class);
@@ -137,8 +143,17 @@ public class AuthenticateApi {
             reply = createReplyForAuthnFailure(authResult, realm);
 
             Audit.audit(Audit.EventID.SECURITY_API_AUTHN_01, req, authResult, Integer.valueOf(reply.getStatusCode()));
-
-            throw new ServletException(authResult.getReason());
+            
+            if (authResult.passwordExpired == true) {
+                throw new PasswordExpiredException(authResult.getReason());
+            }
+            else if (authResult.userRevoked == true) {
+                throw new UserRevokedException(authResult.getReason());
+            }
+            else {
+                throw new ServletException(authResult.getReason());
+            }
+            
         } else {
 
             Audit.audit(Audit.EventID.SECURITY_API_AUTHN_01, req, authResult, Integer.valueOf(HttpServletResponse.SC_OK));
@@ -177,10 +192,12 @@ public class AuthenticateApi {
         invalidateSession(req);
         ssoCookieHelper.removeSSOCookieFromResponse(res);
         ssoCookieHelper.createLogoutCookies(req, res);
+
         //If authenticated with form login, we need to clear the RefrrerURLCookie
         ReferrerURLCookieHandler referrerURLHandler = config.createReferrerURLCookieHandler();
         referrerURLHandler.clearReferrerURLCookie(req, res, ReferrerURLCookieHandler.REFERRER_URL_COOKIENAME);
         SRTServletRequestUtils.removePrivateAttribute(req, "AUTH_TYPE");
+        postLogout(req, res);
         subjectManager.clearSubjects();
 
     }
@@ -202,6 +219,16 @@ public class AuthenticateApi {
             boolean bLogout = service.logout(req, res, userName);
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
                 Tr.debug(tc, "logout return " + bLogout + " on service " + service);
+        }
+    }
+
+    void postLogout(HttpServletRequest req, HttpServletResponse res) {
+        Set<String> serviceIds = unprotectedResourceServiceRef.keySet();
+        for (String serviceId : serviceIds) {
+            UnprotectedResourceService service = unprotectedResourceServiceRef.getService(serviceId);
+            boolean bLogout = service.postLogout(req, res);
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
+                Tr.debug(tc, "postLogout returns " + bLogout + " on service " + service);
         }
     }
 
@@ -422,12 +449,53 @@ public class AuthenticateApi {
      * @param authResult
      */
     public void postProgrammaticAuthenticate(HttpServletRequest req, HttpServletResponse resp, AuthenticationResult authResult) {
+        postProgrammaticAuthenticate(req, resp, authResult, false, true);
+    }
+
+    /**
+     * This method set the caller and invocation subject and call the addSsoCookiesToResponse
+     *
+     * @param req
+     * @param resp
+     * @param authResult
+     */
+    public void postProgrammaticAuthenticate(HttpServletRequest req, HttpServletResponse resp, AuthenticationResult authResult, boolean alwaysSetCallerSubject) {
+        postProgrammaticAuthenticate(req, resp, authResult, alwaysSetCallerSubject, true);
+    }
+
+    /**
+     * This method set the caller and invocation subject and call the addSsoCookiesToResponse
+     *
+     * @param req
+     * @param resp
+     * @param authResult
+     */
+    public void postProgrammaticAuthenticate(final HttpServletRequest req, final HttpServletResponse resp, final AuthenticationResult authResult,
+                                             final boolean alwaysSetCallerSubject, final boolean addSSOCookie) {
+        if (System.getSecurityManager() == null) {
+            setSubjectAndCookies(req, resp, authResult, alwaysSetCallerSubject, addSSOCookie);
+        } else {
+            AccessController.doPrivileged(new PrivilegedAction<Object>() {
+
+                @Override
+                public Object run() {
+                    setSubjectAndCookies(req, resp, authResult, alwaysSetCallerSubject, addSSOCookie);
+                    return null;
+                }
+            });
+        }
+    }
+
+    private void setSubjectAndCookies(HttpServletRequest req, HttpServletResponse resp, final AuthenticationResult authResult, boolean alwaysSetCallerSubject,
+                                      boolean addSSOCookie) {
         Subject subject = authResult.getSubject();
-        if (new SubjectHelper().isUnauthenticated(subjectManager.getCallerSubject())) {
+        if (alwaysSetCallerSubject || new SubjectHelper().isUnauthenticated(subjectManager.getCallerSubject())) {
             subjectManager.setCallerSubject(subject);
         }
         subjectManager.setInvocationSubject(subject);
-        ssoCookieHelper.addSSOCookiesToResponse(subject, req, resp);
+        if (addSSOCookie) {
+            ssoCookieHelper.addSSOCookiesToResponse(subject, req, resp);
+        }
     }
 
     /**
@@ -547,5 +615,4 @@ public class AuthenticateApi {
     public Subject returnSubjectOnLogout() {
         return logoutSubject;
     }
-
 }

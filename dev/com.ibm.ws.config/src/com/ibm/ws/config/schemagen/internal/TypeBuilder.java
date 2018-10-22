@@ -37,6 +37,7 @@ import com.ibm.websphere.metatype.MetaTypeFactory;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.config.xml.internal.metatype.ExtendedAttributeDefinition;
+import com.ibm.ws.config.xml.internal.metatype.ExtendedAttributeDefinitionImpl;
 import com.ibm.ws.config.xml.internal.metatype.ExtendedObjectClassDefinition;
 import com.ibm.ws.config.xml.internal.metatype.ExtendedObjectClassDefinitionImpl;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
@@ -104,6 +105,12 @@ class TypeBuilder {
 
                 if (factoryPids) {
                     type.setHasFactoryReference(true);
+                }
+
+                boolean isIBMFinalSetForIdField = processAttributes(ocd);
+                if (isIBMFinalSetForIdField) {
+                    type.setHasFactoryReference(false);
+                    type.setHasIBMFinalWithDefault(true);
                 }
 
                 if ("internal".equalsIgnoreCase(ocd.getName())) {
@@ -175,7 +182,10 @@ class TypeBuilder {
         buildTypes(metatype, metatype.getFactoryPids(), true);
 
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-            Tr.debug(tc, "Currently processing metatype from bundle " + metatype.getBundle().getSymbolicName() + "_" + metatype.getBundle().getVersion());
+            Bundle mb = metatype.getBundle();
+            if (mb != null) {
+                Tr.debug(tc, "Currently processing metatype from bundle " + mb.getSymbolicName() + "_" + mb.getVersion());
+            }
             Tr.debug(tc, "Pids processed: " + Arrays.toString(metatype.getPids()));
             Tr.debug(tc, "Factory Pids processed: " + Arrays.toString(metatype.getFactoryPids()));
         }
@@ -275,6 +285,22 @@ class TypeBuilder {
                 }
             }
         }
+    }
+
+    public boolean processAttributes(ObjectClassDefinition ocd) {
+        boolean response = false;
+
+        AttributeDefinition[] attributeList = ocd.getAttributeDefinitions(ObjectClassDefinition.ALL);
+        for (AttributeDefinition ad : attributeList) {
+            String[] defaultValue = ad.getDefaultValue();
+            ExtendedAttributeDefinition ead = new ExtendedAttributeDefinitionImpl(ad);
+
+            if (ad.getID().equalsIgnoreCase("id") && ead.isFinal() && (defaultValue != null && defaultValue.length > 0)) {
+                response = true;
+            }
+
+        }
+        return response;
     }
 
     /**
@@ -420,6 +446,7 @@ class TypeBuilder {
         private ResourceBundle resourceBundle;
         private final String pid;
         private final List<String> excludedChildren;
+        private boolean hasIBMFinalWithDefault;
 
         public OCDType(MetaTypeInformation metatype, String pid, ExtendedObjectClassDefinition ocd) {
             this.metatype = metatype;
@@ -516,6 +543,14 @@ class TypeBuilder {
             return (parentPids != null && parentPids.length > 0);
         }
 
+        public boolean getHasIBMFinalWithDefault() {
+            return hasIBMFinalWithDefault;
+        }
+
+        public void setHasIBMFinalWithDefault(boolean hasIBMFinalWithDefault) {
+            this.hasIBMFinalWithDefault = hasIBMFinalWithDefault;
+        }
+
         List<String> getExcludedChildren() {
             return this.excludedChildren;
         }
@@ -591,12 +626,12 @@ class TypeBuilder {
 
         public String[] getLabelKeys(String prefix) {
             return new String[] { prefix + "." + ocd.getID() + ".name",
-                                 prefix + ".name" };
+                                  prefix + ".name" };
         }
 
         public String[] getDescriptionKeys(String prefix) {
             return new String[] { prefix + "." + ocd.getID() + ".description",
-                                 prefix + ".description" };
+                                  prefix + ".description" };
         }
 
         @FFDCIgnore(MissingResourceException.class)

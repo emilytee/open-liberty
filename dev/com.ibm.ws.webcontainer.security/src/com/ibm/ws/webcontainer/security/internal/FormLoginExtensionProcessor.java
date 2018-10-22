@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011 IBM Corporation and others.
+ * Copyright (c) 2011, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -138,9 +138,12 @@ public class FormLoginExtensionProcessor extends WebExtensionProcessor {
             WebRequest webRequest = new WebRequestImpl(request, response, null, webAppSecConfig);
             WebReply reply = new DenyReply("AuthenticationFailed");
             Audit.audit(Audit.EventID.SECURITY_AUTHN_01, webRequest, authResult, Integer.valueOf(reply.getStatusCode()));
-            handleError(request, response);
+            if (!isJaspiEnabled() || !isPostLoginProcessDone(request)) {
+                handleError(request, response);
+            }
+        } else {
+            postFormLoginProcess(request, response, authResult.getSubject());
         }
-        postFormLoginProcess(request, response, authResult.getSubject());
         return true;
     }
 
@@ -211,17 +214,21 @@ public class FormLoginExtensionProcessor extends WebExtensionProcessor {
         subjectManager.setCallerSubject(subject);
         subjectManager.setInvocationSubject(subject);
 
-        storedReq = getStoredReq(req, referrerURLHandler);
-        // If storedReq(WASReqURL) is bad, RuntimeExceptions are thrown in isReferrerHostValid. These exceptions are not caught here. If we return here, WASReqURL is good.
-        if (storedReq != null && storedReq.length() > 0) {
-            ReferrerURLCookieHandler.isReferrerHostValid(PasswordNullifier.nullifyParams(req.getRequestURL().toString()), PasswordNullifier.nullifyParams(storedReq),
-                                                         webAppSecConfig.getWASReqURLRedirectDomainNames());
-        }
-        ssoCookieHelper.addSSOCookiesToResponse(subject, req, res);
-        referrerURLHandler.invalidateReferrerURLCookie(req, res, ReferrerURLCookieHandler.REFERRER_URL_COOKIENAME);
+        boolean isPostLoginProcessDone = isJaspiEnabled() && isPostLoginProcessDone(req);
 
-        if (!res.isCommitted())
-            res.sendRedirect(res.encodeURL(storedReq));
+        if (!isPostLoginProcessDone) {
+            storedReq = getStoredReq(req, referrerURLHandler);
+            // If storedReq(WASReqURL) is bad, RuntimeExceptions are thrown in isReferrerHostValid. These exceptions are not caught here. If we return here, WASReqURL is good.
+            if (storedReq != null && storedReq.length() > 0) {
+                ReferrerURLCookieHandler.isReferrerHostValid(PasswordNullifier.nullifyParams(req.getRequestURL().toString()), PasswordNullifier.nullifyParams(storedReq),
+                                                             webAppSecConfig.getWASReqURLRedirectDomainNames());
+            }
+            ssoCookieHelper.addSSOCookiesToResponse(subject, req, res);
+            referrerURLHandler.invalidateReferrerURLCookie(req, res, ReferrerURLCookieHandler.REFERRER_URL_COOKIENAME);
+            if (!res.isCommitted()) {
+                res.sendRedirect(res.encodeURL(storedReq));
+            }
+        }
     }
 
     /**
@@ -298,6 +305,11 @@ public class FormLoginExtensionProcessor extends WebExtensionProcessor {
             // still nothing?
             loginErrorPage = getErrorPageFromWebXml();
         }
+        // look for global error page.
+        if (loginErrorPage == null || loginErrorPage.length() == 0) {
+            bCtx = false;
+            loginErrorPage = webAppSecConfig.getLoginErrorURL();
+        }
         if (loginErrorPage != null) {
 
             return setUpAFullUrl(req, loginErrorPage, bCtx);
@@ -354,4 +366,13 @@ public class FormLoginExtensionProcessor extends WebExtensionProcessor {
         WebAuthenticator jaspiAuthenticator = webAuthenticatorRef != null ? webAuthenticatorRef.getService("com.ibm.ws.security.jaspi") : null;
         return jaspiAuthenticator != null;
     }
+
+    private boolean isPostLoginProcessDone(HttpServletRequest req) {
+        Boolean result = (Boolean)req.getAttribute("com.ibm.ws.security.javaeesec.donePostLoginProcess");
+        if (result != null && result) {
+            return true;
+        }
+        return false;
+    }
+
 }

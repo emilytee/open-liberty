@@ -62,6 +62,8 @@ public class IRequestImpl implements IRequestExtended
   private boolean isHttpsIndicatorSecure; 
   private boolean isHttpsIndicatorSecureSet;
   private String normalizedURI= null; // PI05525
+  
+  private String contentType;
   private static boolean normalizeRequestURI = WCCustomProperties.NORMALIZE_REQUEST_URI; //PI05525
 
   /**
@@ -127,14 +129,16 @@ public class IRequestImpl implements IRequestExtended
   
   //PI75166
   /**
-   * @return
+   * @return the ciphersuite string, or null if the SSL context or session is null
    */
   public String getConnectionCipherSuite() { //F001872 Start
        
       String suite = null;
       SSLContext ssl = this.conn.getSSLContext();
       if (null != ssl) {
-          suite = ssl.getSession().getCipherSuite();
+          if (ssl.getSession() != null) {
+              suite = ssl.getSession().getCipherSuite();
+          }
       }    
       if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
           Tr.debug(tc, "getConnectionCipherSuite suite --> " + suite);
@@ -172,7 +176,11 @@ public class IRequestImpl implements IRequestExtended
 
   public String getContentType()
   {
-    return this.request.getHeader("Content-Type");
+      if (this.contentType == null) {
+          this.contentType = this.request.getHeader("Content-Type");
+      }
+      
+      return this.contentType;
   }
 
   public byte[] getCookieValue(String cookieName)
@@ -804,5 +812,13 @@ public class IRequestImpl implements IRequestExtended
     // LIBERTY: TODO Auto-generated method stub - probably needed for ARD
     // function
     return null;
+  }
+  
+  /**
+   * @return HttpInboundConnection for this request
+   */
+  @Override
+  public HttpInboundConnection getHttpInboundConnection() {
+      return this.conn;
   }
 }

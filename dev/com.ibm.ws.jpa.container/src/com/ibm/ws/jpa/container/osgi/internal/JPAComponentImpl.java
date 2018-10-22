@@ -13,11 +13,15 @@ package com.ibm.ws.jpa.container.osgi.internal;
 import static com.ibm.ws.jpa.management.JPAConstants.PERSISTENCE_XML_RESOURCE_NAME;
 
 import java.io.File;
+import java.io.PrintWriter;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.security.AccessController;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Dictionary;
+import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.Iterator;
@@ -65,10 +69,11 @@ import com.ibm.ws.jpa.container.osgi.jndi.JPAJndiLookupObjectFactory;
 import com.ibm.ws.jpa.management.AbstractJPAComponent;
 import com.ibm.ws.jpa.management.JPAApplInfo;
 import com.ibm.ws.jpa.management.JPAEMFPropertyProvider;
+import com.ibm.ws.jpa.management.JPAIntrospection;
 import com.ibm.ws.jpa.management.JPAPuScope;
 import com.ibm.ws.jpa.management.JPARuntime;
 import com.ibm.ws.kernel.LibertyProcess;
-import com.ibm.ws.kernel.service.util.PrivHelper;
+import com.ibm.ws.kernel.service.util.SecureAction;
 import com.ibm.ws.tx.embeddable.EmbeddableWebSphereTransactionManager;
 import com.ibm.wsspi.adaptable.module.Container;
 import com.ibm.wsspi.adaptable.module.Entry;
@@ -79,17 +84,19 @@ import com.ibm.wsspi.kernel.service.utils.AtomicServiceReference;
 import com.ibm.wsspi.kernel.service.utils.ConcurrentServiceReferenceSet;
 import com.ibm.wsspi.kernel.service.utils.FrameworkState;
 import com.ibm.wsspi.kernel.service.utils.ServiceAndServiceReferencePair;
+import com.ibm.wsspi.logging.Introspector;
 import com.ibm.wsspi.resource.ResourceBindingListener;
 
 @Component(configurationPid = "com.ibm.ws.jpacomponent",
            configurationPolicy = ConfigurationPolicy.REQUIRE,
-           service = { JPAComponent.class, ApplicationStateListener.class, ModuleStateListener.class },
-// Use a higher service.ranking to ensure app/module listeners can
-// register class transformers before other components attempt to
-// load classes.
+           service = { JPAComponent.class, ApplicationStateListener.class, ModuleStateListener.class, Introspector.class },
+           // Use a higher service.ranking to ensure app/module listeners can
+           // register class transformers before other components attempt to
+           // load classes.
            property = { "service.vendor=IBM", "service.ranking:Integer=1000" })
-public class JPAComponentImpl extends AbstractJPAComponent implements ApplicationStateListener, ModuleStateListener {
+public class JPAComponentImpl extends AbstractJPAComponent implements ApplicationStateListener, ModuleStateListener, Introspector {
     private static final TraceComponent tc = Tr.register(JPAComponentImpl.class);
+    final static SecureAction priv = AccessController.doPrivileged(SecureAction.get());
 
     private static final String REFERENCE_JPA_RUNTIME = "jpaRuntime";
     private static final String REFERENCE_TRANSACTION_MANAGER = "transactionManager";
@@ -367,9 +374,9 @@ public class JPAComponentImpl extends AbstractJPAComponent implements Applicatio
      * The jar file or directory whose META-INF directory contains the persistence.xml
      * file is termed the root of the persistence unit. <p>
      *
-     * @param appName name of the application that contains the persistence.xml file
+     * @param appName     name of the application that contains the persistence.xml file
      * @param archiveName name of the archive that contains the persistence.xml file
-     * @param pxml reference to the persistence.xml file
+     * @param pxml        reference to the persistence.xml file
      */
     private URL getPXmlRootURL(String appName, String archiveName, Entry pxml) {
         URL pxmlUrl = pxml.getResource();
@@ -389,12 +396,12 @@ public class JPAComponentImpl extends AbstractJPAComponent implements Applicatio
      * Common routine that will locate and process persistence.xml files in the
      * library directory of either an EAR or WAR archive. <p>
      *
-     * @param applInfo the application archive information
+     * @param applInfo    the application archive information
      * @param archiveName name of the archive containing the persistence.xml
-     * @param rootPrefix the persistence unit root prefix; prepended to the library
-     *            jar name if not null; otherwise archiveName is used
-     * @param libEntry the library directory entry from the enclosing container
-     * @param scope the scope to be applied to all persistence units found
+     * @param rootPrefix  the persistence unit root prefix; prepended to the library
+     *                        jar name if not null; otherwise archiveName is used
+     * @param libEntry    the library directory entry from the enclosing container
+     * @param scope       the scope to be applied to all persistence units found
      * @param classLaoder ClassLoader of the corresponding scope
      */
     private void processLibraryJarPersistenceXml(JPAApplInfo applInfo, Container libContainer,
@@ -441,7 +448,7 @@ public class JPAComponentImpl extends AbstractJPAComponent implements Applicatio
      * Locates and processes all persistence.xml file in a WAR module. <p>
      *
      * @param applInfo the application archive information
-     * @param module the WAR module archive information
+     * @param module   the WAR module archive information
      */
     private void processWebModulePersistenceXml(JPAApplInfo applInfo, ContainerInfo warContainerInfo, ClassLoader warClassLoader) {
         final boolean isTraceOn = TraceComponent.isAnyTracingEnabled();
@@ -496,7 +503,7 @@ public class JPAComponentImpl extends AbstractJPAComponent implements Applicatio
      * Locates and processes persistence.xml file in an EJB module. <p>
      *
      * @param applInfo the application archive information
-     * @param module the EJB module archive information
+     * @param module   the EJB module archive information
      */
     private void processEJBModulePersistenceXml(JPAApplInfo applInfo, ContainerInfo module, ClassLoader appClassloader) {
         final boolean isTraceOn = TraceComponent.isAnyTracingEnabled();
@@ -536,7 +543,7 @@ public class JPAComponentImpl extends AbstractJPAComponent implements Applicatio
      * Locates and processes persistence.xml file in an Application Client module. <p>
      *
      * @param applInfo the application archive information
-     * @param module the client module archive information
+     * @param module   the client module archive information
      */
     private void processClientModulePersistenceXml(JPAApplInfo applInfo, ContainerInfo module, ClassLoader loader) {
         final boolean isTraceOn = TraceComponent.isAnyTracingEnabled();
@@ -579,7 +586,7 @@ public class JPAComponentImpl extends AbstractJPAComponent implements Applicatio
      *
      * The ValidatorFactory is supported in WAS.
      *
-     * @param xmlSchemaVersion the schema version of the persistence.xml
+     * @param xmlSchemaVersion      the schema version of the persistence.xml
      * @param integrationProperties the current set of integration-level properties
      */
     // F743-12524
@@ -832,7 +839,90 @@ public class JPAComponentImpl extends AbstractJPAComponent implements Applicatio
         stuckApps.clear();
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
             Tr.debug(tc, "Recycling JPA applications", appsToRestart);
-        ApplicationRecycleCoordinator appCoord = (ApplicationRecycleCoordinator) PrivHelper.locateService(context, REFERENCE_APP_COORD);
+        ApplicationRecycleCoordinator appCoord = (ApplicationRecycleCoordinator) priv.locateService(context, REFERENCE_APP_COORD);
         appCoord.recycleApplications(appsToRestart);
+    }
+
+    /*
+     * com.ibm.wsspi.logging.Introspector implementation
+     *
+     */
+    @Override
+    public String getIntrospectorName() {
+        return "JPARuntimeInspector";
+    }
+
+    @Override
+    public String getIntrospectorDescription() {
+        return "JPA Runtime Internal State Information";
+    }
+
+    @Override
+    public void introspect(PrintWriter out) throws Exception {
+        out.println("JPA Component State:");
+        out.println();
+
+        out.println("Service Properties:");
+        Enumeration<String> keysEnum = props.keys();
+        while (keysEnum.hasMoreElements()) {
+            String key = keysEnum.nextElement();
+            Object o = props.get(key);
+            if (o != null && o.getClass().isArray()) {
+                out.print("  " + key + " = [ ");
+                Object[] objArr = (Object[]) o;
+                if (objArr.length != 0) {
+                    boolean first = true;
+                    for (Object obj : objArr) {
+                        if (first) {
+                            first = false;
+                        } else {
+                            out.print(", ");
+                        }
+                        out.print(obj);
+                    }
+                }
+                out.println(" ]");
+            } else {
+                out.println("  " + key + " = " + o);
+            }
+
+        }
+        out.println();
+
+        out.println("jpaRuntime = " + jpaRuntime.getService());
+        out.println("Provider Runtime Integration Service = " + providerIntegrationSR.getService());
+
+        out.println("Registered JPAEMFPropertyProvider Services:");
+        Iterator<JPAEMFPropertyProvider> servicesIter = propProviderSRs.getServices();
+        while (servicesIter.hasNext()) {
+            out.println("   " + servicesIter.next());
+        }
+        out.println();
+
+        // Collect all JPAApplInfo instances known by the JPA Runtime
+        final Map<String, JPAApplInfo> appMap = new HashMap<String, JPAApplInfo>();
+        synchronized (applList) {
+            appMap.putAll(applList);
+        }
+
+        // Find all JPA enabled applications, scopeinfo, pxmlinfo, and persistence unit info
+        final JPAIntrospection jpai = JPAIntrospection.getJPAIntrospection();
+        try {
+            for (Map.Entry<String, JPAApplInfo> entry : appMap.entrySet()) {
+                final String appName = entry.getKey();
+                final OSGiJPAApplInfo appl = (OSGiJPAApplInfo) entry.getValue();
+
+                jpai.beginApplicationVisit(appName, appl);
+                try {
+                    appl.introspect(out);
+                } finally {
+                    jpai.endApplicationVisit();
+                }
+            }
+
+            jpai.executeIntrospectionAnalysis(out);
+        } finally {
+            JPAIntrospection.endJPAIntrospection();
+        }
     }
 }

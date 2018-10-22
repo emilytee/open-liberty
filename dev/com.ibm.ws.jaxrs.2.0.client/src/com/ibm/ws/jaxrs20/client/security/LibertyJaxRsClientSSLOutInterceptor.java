@@ -10,8 +10,14 @@
  *******************************************************************************/
 package com.ibm.ws.jaxrs20.client.security;
 
+import java.lang.reflect.Method;
+import java.security.AccessController;
+import java.security.PrivilegedExceptionAction;
+import java.util.Map;
+
 import javax.net.ssl.SSLSocketFactory;
 
+import org.apache.cxf.common.util.PropertyUtils;
 import org.apache.cxf.common.util.StringUtils;
 import org.apache.cxf.configuration.jsse.TLSClientParameters;
 import org.apache.cxf.interceptor.Fault;
@@ -24,7 +30,6 @@ import org.apache.cxf.transport.http.HTTPConduit;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.jaxrs20.client.JAXRSClientConstants;
-import com.ibm.ws.jaxrs20.client.component.JaxRsAppSecurity;
 
 /**
  *
@@ -49,9 +54,10 @@ public class LibertyJaxRsClientSSLOutInterceptor extends AbstractPhaseIntercepto
 
         //SSL check
         //see if HTTPS is used
-        boolean isSecured = false;
         String address = (String) message.get(Message.ENDPOINT_ADDRESS);
-        isSecured = address == null ? false : address.startsWith(HTTPS_SCHEMA);
+        if (!address.startsWith(HTTPS_SCHEMA)) {
+            return; // only process HTTPS requests
+        } ;
 
         //see if SSL Ref id is used
         Object sslRefObj = message.get(JAXRSClientConstants.SSL_REFKEY);
@@ -61,21 +67,14 @@ public class LibertyJaxRsClientSSLOutInterceptor extends AbstractPhaseIntercepto
             sslRef = (String) sslRefObj;
         }
 
-        Object disableCNCheckObj = message.get(JAXRSClientConstants.DISABLE_CN_CHECK);
-        //Allow a null sslRef to be used,  Liberty will resolve it to the default // getSSLSocketFactory will return null if either the ssl feature is not enabled
+        //Allow a null sslRef to be used,  Liberty will resolve it to the default
+        // getSocketFactory will return null if either the ssl feature is not enabled
         // or if it is enabled but there is no SSL configuration defined.  A null here
         // means to use the JDK's SSL implementation.
-        if (isSecured && JaxRsAppSecurity.getSSLSocketFactory(sslRef, null) != null) {
-
-            boolean disableCNCheck = false;
-            if (disableCNCheckObj instanceof Boolean) {
-                disableCNCheck = ((Boolean) disableCNCheckObj).booleanValue();
-            } else if (disableCNCheckObj instanceof String) {
-                disableCNCheck = Boolean.parseBoolean((String) disableCNCheckObj);
-            }
-
+        if (getSocketFactory(sslRef) != null) {
+            Object disableCNCheckObj = message.get(JAXRSClientConstants.DISABLE_CN_CHECK);
             Conduit cd = message.getExchange().getConduit(message);
-            configClientSSL(cd, sslRef, disableCNCheck);
+            configClientSSL(cd, sslRef, PropertyUtils.isTrue(disableCNCheckObj));
         }
     }
 
@@ -111,7 +110,7 @@ public class LibertyJaxRsClientSSLOutInterceptor extends AbstractPhaseIntercepto
                 Tr.debug(tc, "Get Liberty default SSLSocketFactory.");
             }
         }
-        sslSocketFactory = JaxRsAppSecurity.getSSLSocketFactory(sslRef, null);
+        sslSocketFactory = getSocketFactory(sslRef);
 
         if (null != sslSocketFactory) {
             if (null == tlsClientParams) {
@@ -131,4 +130,31 @@ public class LibertyJaxRsClientSSLOutInterceptor extends AbstractPhaseIntercepto
         this.secConfig = secConfig;
     }
 
+    private SSLSocketFactory getSocketFactory(String sslRef) {
+        try {
+            final Class<?> jaxrsSslMgrClass = Class.forName("com.ibm.ws.jaxrs20.appsecurity.security.JaxRsSSLManager");
+            if (jaxrsSslMgrClass == null) {
+                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                    Tr.debug(tc, "getSocketFactory could not find JaxRsSSLManager class");
+                }
+                return null;
+            }
+            Object classObject = jaxrsSslMgrClass.newInstance();
+            Method m = AccessController.doPrivileged(new PrivilegedExceptionAction<Method>() {
+
+                @Override
+                public Method run() throws NoSuchMethodException, SecurityException {
+                    return jaxrsSslMgrClass.getDeclaredMethod("getSSLSocketFactoryBySSLRef", String.class, Map.class, boolean.class);
+                }
+            });
+            Object[] parameters = { sslRef, null, false }; //getSSLSocketFactoryBySSLRef ignores the third (boolean) parameter
+            SSLSocketFactory ssLSocketFactory = (SSLSocketFactory) m.invoke(classObject, parameters);
+            return ssLSocketFactory;
+        } catch (Exception e) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "getSocketFactory reflection failed with exception " + e.toString());
+            }
+            return null;
+        }
+    }
 }

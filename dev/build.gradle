@@ -11,44 +11,80 @@
 /*
  * Master Gradle build script
  *
- * Depends on bndPlugin property set by settings.gradle.
- * and bnd_* values from gradle.properties.
+ * Depends on bnd_* values from gradle.properties.
  */
 
-import aQute.bnd.build.Workspace
-import aQute.bnd.osgi.Constants
-
-/* Add bnd gradle plugin as a script dependency */
-buildscript {
-  dependencies {
-    classpath bndPlugin
-  }
+ext {
+  cnf = rootProject.project(bnd_cnf)
+  buildImage = project(':build.image')
 }
 
-/* Initialize the bnd workspace */
-Workspace.setDriver(Constants.BNDDRIVER_GRADLE)
-Workspace.addGestalt(Constants.GESTALT_BATCH, null)
-ext.bndWorkspace = new Workspace(rootDir, bnd_cnf).setOffline(gradle.startParameter.offline)
-ext.cnf = rootProject.project(bnd_cnf)
 
-/* Configure the subprojects */
 subprojects {
+  plugins.apply 'java'
   def bndProject = bndWorkspace.getProject(name)
+
   if (bndProject != null) {
     plugins.apply 'biz.aQute.bnd'
+  } else {
+    task publish { }
+    task release { }
+    task releaseNeeded { dependsOn release }
+    task copyPiiFiles { }
   }
+
   /* For Java 9 builds, set the --release compiler flag to keep bootclasspath in sync */
-  //compileJava {
   tasks.withType(JavaCompile) {
     doFirst {
-      if(JavaVersion.current().isJava9Compatible()) {
+      if(JavaVersion.current().isJava9Compatible() && !'off'.equals(bnd('javac.args.release'))) {
         def release = sourceCompatibility
         if(sourceCompatibility < '9')
           release = sourceCompatibility.substring(2);
+        if('current'.equals(bnd('javac.args.release')))
+          release = JavaVersion.current().getMajorVersion() 
         println "Compiling with --release=" + release
         options.compilerArgs.addAll([ '--release', release])
       }
     }
+  }
+  tasks.withType(Javadoc) {
+    doFirst {
+      // Starting with JDK 9.0.4 the javadoc compiler started to striclty enforce proper HTML
+      // syntax and other breaking changes.  Fixing all of these ocurrances would take far too
+      // long and be a poor use of time, so we will disable these checks for JDK9 and up
+      if(JavaVersion.current().isJava9Compatible()) {
+        options.addStringOption('Xdoclint:none', '-quiet')
+      }
+    }
+  }
+
+  if (bndProject != null) {
+    apply from: cnf.file('gradle/scripts/repos.gradle')
+    apply from: cnf.file('gradle/scripts/publish.gradle')
+    apply from: cnf.file('gradle/scripts/anttaskdefs.gradle')
+    apply from: cnf.file('gradle/scripts/tasks.gradle')
+
+    if (bndis('fat.project')) {
+      apply from: cnf.file('gradle/scripts/fat.gradle')
+    }
+
+  }
+
+  // Make the release task depend on assemble so that invoking 'release' or 'releaseNeeded'
+  // will publish jar updates to the local build.image/wlp image
+  release.dependsOn assemble
+  release.dependsOn publish
+}
+
+task testResults {
+  dependsOn subprojects.test
+
+  doLast {
+    userProps.setProperty('tests.total.failed', failedTestCountTotal.toString())
+    userProps.setProperty('tests.total.successful', successfulTestCountTotal.toString())
+
+    File propsFile = new File('generated.properties')
+    userProps.store(propsFile.newWriter(), null)
   }
 }
 
@@ -56,4 +92,3 @@ task wrapper(type: Wrapper) {
   jarFile = rootProject.file('.gradle-wrapper/gradle-wrapper.jar')
 }
 
-apply from: 'cnf/gradle/scripts/tasks.gradle'

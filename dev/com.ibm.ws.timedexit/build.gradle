@@ -9,15 +9,20 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 
-// Special publish feature task since this is a test feature
-publishFeatureResources {
-    dependsOn jar
-	dependsOn copyMavenLibs
-	inputs.files(fileTree(dir: "${projectDir}/publish/features", include: '*.mf')).skipWhenEmpty()
-    doLast {
-        copy {
-            from "${projectDir}/publish/features"
-            into "${rootDir}/build.image/wlp/lib/features"
-        }
-    }
+plugins {
+  id "net.ossindex.audit" version "0.3.8-beta"
 }
+
+audit {
+    failOnError = true
+}
+
+// Special publish feature task since this is a test feature
+task publishFeatureManifests(type: Copy) {
+    dependsOn jar
+    from project.file('publish/features')
+    into buildImage.file('wlp/lib/features')
+    include '*.mf'
+}
+
+assemble.dependsOn publishFeatureManifests

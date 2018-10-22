@@ -9,8 +9,17 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 
+plugins {
+  id "net.ossindex.audit" version "0.3.8-beta"
+}
+
+audit {
+    failOnError = true
+}
+
 test {
+    dependsOn ':cnf:copyMavenLibs'
     doFirst {
-		jvmArgs "-javaagent:${rootDir}/cnf/mavenlibs/jmockit-1.25.jar"
-	}
+        jvmArgs '-javaagent:' + cnf.file('mavenlibs/jmockit-1.25.jar')
+    }
 }

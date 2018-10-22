@@ -15,9 +15,11 @@ import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.http.channel.h2internal.FrameReadProcessor;
 import com.ibm.ws.http.channel.h2internal.FrameTypes;
 import com.ibm.ws.http.channel.h2internal.H2ConnectionSettings;
-import com.ibm.ws.http.channel.h2internal.exceptions.FrameSizeException;
 import com.ibm.ws.http.channel.h2internal.exceptions.Http2Exception;
 import com.ibm.ws.http.channel.internal.HttpMessages;
+import com.ibm.ws.http.dispatcher.internal.HttpDispatcher;
+import com.ibm.wsspi.bytebuffer.WsByteBuffer;
+import com.ibm.wsspi.bytebuffer.WsByteBufferPoolManager;
 
 /**
  *
@@ -46,6 +48,7 @@ public abstract class Frame {
     protected boolean PADDED_FLAG;
     protected boolean PRIORITY_FLAG;
     protected boolean ACK_FLAG;
+    protected int writeFrameLength = SIZE_FRAME_BEFORE_PAYLOAD;
 
     protected boolean initialized;
 
@@ -64,8 +67,10 @@ public abstract class Frame {
 
     /**
      * Grabs the payload out of a binary read frame
+     *
+     * @throws Http2Exception
      */
-    abstract public void processPayload(FrameReadProcessor frp) throws FrameSizeException;
+    abstract public void processPayload(FrameReadProcessor frp) throws Http2Exception;
 
     // ################# FRAME WRITE OPS #####################################
 
@@ -73,6 +78,10 @@ public abstract class Frame {
 
     protected byte[] createFrameArray() {
         return new byte[SIZE_FRAME_BEFORE_PAYLOAD + payloadLength];
+    }
+
+    protected WsByteBuffer createFrameBuffer() {
+        return getBuffer(SIZE_FRAME_BEFORE_PAYLOAD + payloadLength);
     }
 
     protected void setFrameHeaders(byte[] frame, byte type) {
@@ -96,8 +105,10 @@ public abstract class Frame {
             frame[utils.FRAME_FLAGS_INDEX] = (byte) (frame[utils.FRAME_FLAGS_INDEX] | 0x20);
         }
         if (this.reservedBit) {
-            streamId = streamId ^ (1 << 31);
-            utils.Move32BitstoByteArray(streamId, frame, utils.FRAME_STREAM_START_INDEX_INT);
+            // we don't actually want to write out a reserved bit; write the unadulterated streamId bits instead
+            //int streamIdWithReservedBit = streamId | (1 << 31);
+            //utils.Move32BitstoByteArray(streamIdWithReservedBit, frame, utils.FRAME_STREAM_START_INDEX_INT);
+            utils.Move31BitstoByteArray(streamId, frame, utils.FRAME_STREAM_START_INDEX_INT);
         } else {
             utils.Move31BitstoByteArray(streamId, frame, utils.FRAME_STREAM_START_INDEX_INT);
         }
@@ -108,18 +119,18 @@ public abstract class Frame {
      *
      * @return
      */
-    public byte[] buildFrameForWrite() {
+    public WsByteBuffer buildFrameForWrite() {
         if (!initialized) {
             return null;
         }
-
-        // set up the frame byte array
-        byte[] frame = createFrameArray();
-
-        return frame;
+        return createFrameBuffer();
     }
 
     // ################# SETTERS / GETTERS #####################################
+    public int getWriteFrameLength() {
+        return writeFrameLength;
+    }
+
     public byte getFrameFlags() {
         return flags;
     }
@@ -260,7 +271,7 @@ public abstract class Frame {
     public String toString() {
         StringBuilder frameToString = new StringBuilder();
 
-        frameToString.append("FrameType: " + this.getFrameType() + "\n");
+        frameToString.append("\nFrameType: " + this.getFrameType() + "\n");
 
         frameToString.append("FrameFlags:\n");
         frameToString.append(" FlagAckSet: ").append(this.flagAckSet()).append("\n");
@@ -274,5 +285,10 @@ public abstract class Frame {
         frameToString.append("StreamId: ").append(this.getStreamId()).append("\n");
 
         return frameToString.toString();
+    }
+
+    protected WsByteBuffer getBuffer(int length) {
+        WsByteBufferPoolManager mgr = HttpDispatcher.getBufferManager();
+        return mgr.allocate(length);
     }
 }

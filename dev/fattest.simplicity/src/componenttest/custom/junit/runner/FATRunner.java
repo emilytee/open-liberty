@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011, 2015 IBM Corporation and others.
+ * Copyright (c) 2011, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -24,10 +24,12 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.ClassRule;
 import org.junit.internal.AssumptionViolatedException;
@@ -62,19 +64,12 @@ import junit.framework.AssertionFailedError;
 public class FATRunner extends BlockJUnit4ClassRunner {
     private static final Class<?> c = FATRunner.class;
 
-    /**
-     * We look for lines like
-     * Exception = com.ibm.ws.security.authentication.AuthenticationException
-     * in the ffdc file.
-     */
+    // Used to reduce timeouts to a sensible level when FATs are running locally
+    public static final boolean FAT_TEST_LOCALRUN = Boolean.getBoolean("fat.test.localrun");
 
     private static final int MAX_FFDC_LINES = 1000;
     private static final boolean DISABLE_FFDC_CHECKING = Boolean.getBoolean("disable.ffdc.checking");
 
-    /**
-     * Unlike FFDC checking, the tmp dir checking will default to being off, but can be enabled with the
-     * "enabled.tmpdir.checking" property.
-     */
     private static final boolean ENABLE_TMP_DIR_CHECKING = Boolean.getBoolean("enable.tmpdir.checking");
     private static final long TMP_DIR_SIZE_THRESHOLD = 20 * 1024; // 20k
 
@@ -87,8 +82,27 @@ public class FATRunner extends BlockJUnit4ClassRunner {
                                                                       new JavaLevelFilter()
     };
 
+    private static final Set<String> classesUsingFATRunner = new HashSet<String>();
+
     static {
+        Log.info(c, "<clinit>", "System property: fat.test.localrun=" + FAT_TEST_LOCALRUN);
         Log.info(c, "<clinit>", "Using filters " + Arrays.toString(testFiltersToApply));
+    }
+
+    public static void requireFATRunner(String className) {
+        if (!classesUsingFATRunner.contains(className))
+            throw new IllegalStateException("The class " + className + " is attempting to use functionality " +
+                                            "that requires @RunWith(FATRunner.class) to be specified at the " +
+                                            "class level.");
+    }
+
+    @Override
+    protected String testName(FrameworkMethod method) {
+        String testName = super.testName(method);
+        if (RepeatTestFilter.CURRENT_REPEAT_ACTION != null && !RepeatTestFilter.CURRENT_REPEAT_ACTION.equals("NO_MODIFICATION_ACTION")) {
+            testName = testName + "_" + RepeatTestFilter.CURRENT_REPEAT_ACTION;
+        }
+        return testName;
     }
 
     private boolean hasTests = true;
@@ -117,6 +131,7 @@ public class FATRunner extends BlockJUnit4ClassRunner {
 
     public FATRunner(Class<?> tc) throws Exception {
         super(tc);
+        classesUsingFATRunner.add(tc.getName());
         try {
             //filter any tests, using our list of filters
             filter(new CompoundFilter(testFiltersToApply));
@@ -166,6 +181,9 @@ public class FATRunner extends BlockJUnit4ClassRunner {
         Statement statement = new Statement() {
             @Override
             public void evaluate() throws Throwable {
+                if (!RepeatTestFilter.shouldRun(method)) {
+                    return;
+                }
                 Map<String, Long> tmpDirFilesBeforeTest = createDirectorySnapshot("/tmp");
                 try {
                     Log.info(c, "evaluate", "entering " + getTestClass().getName() + "." + method.getName());
@@ -177,6 +195,14 @@ public class FATRunner extends BlockJUnit4ClassRunner {
                     // If we got to here without error, do a final check that
                     // any FFDCs were expected
                     Map<String, FFDCInfo> ffdcAfterTest = retrieveFFDCCounts();
+
+                    // grab the ffdcHeaders for every FFDCInfo we're about to filter
+                    for (FFDCInfo ffdcInfo : ffdcBeforeTest.values()) {
+                        ffdcInfo.ffdcHeader = getFFDCHeader(new RemoteFile(ffdcInfo.machine, ffdcInfo.ffdcFile));
+                    }
+                    for (FFDCInfo ffdcInfo : ffdcAfterTest.values()) {
+                        ffdcInfo.ffdcHeader = getFFDCHeader(new RemoteFile(ffdcInfo.machine, ffdcInfo.ffdcFile));
+                    }
 
                     Map<String, FFDCInfo> unexpectedFFDCs = filterOutPreexistingFFDCs(ffdcBeforeTest, ffdcAfterTest);
 
@@ -194,7 +220,10 @@ public class FATRunner extends BlockJUnit4ClassRunner {
                     List<String> allowedFFDCs = getAllowedFFDCAnnotationFromTest(method);
                     // remove allowedFFDCs
                     for (String ffdcException : allowedFFDCs) {
-                        unexpectedFFDCs.remove(ffdcException);
+                        if (ffdcException.equals(AllowedFFDC.ALL_FFDC))
+                            unexpectedFFDCs.clear();
+                        else
+                            unexpectedFFDCs.remove(ffdcException);
                     }
 
                     for (FFDCInfo ffdcInfo : unexpectedFFDCs.values()) {
@@ -277,28 +306,6 @@ public class FATRunner extends BlockJUnit4ClassRunner {
         }
     }
 
-//    @Override
-//    protected Statement withBeforeClasses(Statement statement) {
-//        return hasTestsToRun() ? super.withBeforeClasses(statement) : statement;
-//    }
-//
-//    @Override
-//    protected Statement withAfterClasses(Statement statement) {
-//        return hasTestsToRun() ? super.withAfterClasses(statement) : statement;
-//    }
-//
-//    @Override
-//    @SuppressWarnings("deprecation")
-//    protected Statement withBefores(FrameworkMethod method, Object target, Statement statement) {
-//        return hasTestsToRun() ? super.withBefores(method, target, statement) : statement;
-//    }
-//
-//    @Override
-//    @SuppressWarnings("deprecation")
-//    protected Statement withAfters(FrameworkMethod method, Object target, Statement statement) {
-//        return hasTestsToRun() ? super.withAfters(method, target, statement) : statement;
-//    }
-
     /**
      * Run at the end of the whole test. Tidy up and check for any FFDCs which were produced by the cleanup.
      */
@@ -309,6 +316,9 @@ public class FATRunner extends BlockJUnit4ClassRunner {
         Statement statement = new Statement() {
             @Override
             public void evaluate() throws Throwable {
+                if (!RepeatTestFilter.shouldRun(getTestClass().getJavaClass())) {
+                    return;
+                }
                 try {
                     superStatement.evaluate();
                 } finally {
@@ -336,6 +346,8 @@ public class FATRunner extends BlockJUnit4ClassRunner {
                         blowup("A problem was detected during post-test tidy up. New FFDC file is generated. Please check the log directory. The beginning of the FFDC file is:\n"
                                + ffdcHeader);
                     }
+
+                    LogPolice.checkUsedTrace();
                 }
             }
         };
@@ -361,10 +373,6 @@ public class FATRunner extends BlockJUnit4ClassRunner {
     /**
      * Creates a new list which includes all the strings in the after list which
      * are not in the before list.
-     *
-     * @param before
-     * @param after
-     * @return
      */
     private List<String> filterOutPreexistingFFDCs(List<String> before, List<String> after) {
         // The after list is modified in this method so create a copy
@@ -378,7 +386,7 @@ public class FATRunner extends BlockJUnit4ClassRunner {
         HashMap<String, FFDCInfo> filtered = new HashMap<String, FFDCInfo>(ffdcAfterTest.size());
         for (Map.Entry<String, FFDCInfo> afterEntry : ffdcAfterTest.entrySet()) {
             FFDCInfo beforeInfo = ffdcBeforeTest.get(afterEntry.getKey());
-            if (beforeInfo != null && beforeInfo.ffdcFile.equals(afterEntry.getValue().ffdcFile)) {
+            if (beforeInfo != null && beforeInfo.ffdcHeader.equals(afterEntry.getValue().ffdcHeader)) {
                 int newVal = afterEntry.getValue().count - beforeInfo.count;
                 if (newVal != 0) {
                     FFDCInfo filteredInfo = new FFDCInfo(afterEntry.getValue(), newVal);
@@ -462,7 +470,7 @@ public class FATRunner extends BlockJUnit4ClassRunner {
                 // If the server has the FFDC checking flag set to false, skip it.
                 if (server.getFFDCChecking() == false) {
                     Log.info(c, "retrieveFFDCCounts", "FFDC log collection for server: " + server.getServerName() + " is skipped. FFDC Checking is disabled for this server.");
-                    break;
+                    continue;
                 }
 
                 int readAttempts = 0;
@@ -496,8 +504,6 @@ public class FATRunner extends BlockJUnit4ClassRunner {
                             }
                         }
                     } catch (TopologyException e) {
-                        //ignore the exception as log directory doesn't exist and no FFDC log
-                        Log.info(c, "retrieveFFDCCounts", "Ignoring exception: " + e);
                         retry = false;
                     } catch (Exception e) {
                         Log.info(c, "retrieveFFDCCounts", "Exception parsing FFDC summary");
@@ -595,7 +601,6 @@ public class FATRunner extends BlockJUnit4ClassRunner {
                     ffdcList = LibertyServerFactory.retrieveFFDCFile(iterator.next());
                 } catch (TopologyException e) {
                     //ignore the exception as log directory doesn't exist and no FFDC log
-                    Log.info(c, "retrieveFFDCCounts", "Ignoring exception: " + e);
                 } catch (Exception e) {
                     Log.error(c, "retrieveFFDCLogs", e);
                 }
@@ -670,8 +675,8 @@ public class FATRunner extends BlockJUnit4ClassRunner {
                     if (http != null) {
                         Log.info(c, method, "Using ports from <httpEndpoint> element in " + serverName + " server.xml");
                         // If there is an <httpEndpoint> element in the server config, use those ports
-                        serv.setHttpDefaultPort(http.getHttpPort());
-                        serv.setHttpDefaultSecurePort(http.getHttpsPort());
+                        serv.setHttpDefaultPort(Integer.parseInt(http.getHttpPort()));
+                        serv.setHttpDefaultSecurePort(Integer.parseInt(http.getHttpsPort()));
                     } else if (include != null) {
                         Log.info(c, method, "Using BVT HTTP port defaults in fatTestPorts.xml for " + serverName);
                         serv.setHttpDefaultPort(8010);

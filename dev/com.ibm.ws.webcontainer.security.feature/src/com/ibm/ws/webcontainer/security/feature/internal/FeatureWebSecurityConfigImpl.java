@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011 IBM Corporation and others.
+ * Copyright (c) 2011, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -246,11 +246,28 @@ class FeatureWebSecurityConfigImpl implements WebAppSecurityConfig {
 
     /**
      * {@inheritDoc}<p>
-     * This does not need an implemented as these properties never change.
      */
     @Override
     public String getChangedProperties(WebAppSecurityConfig original) {
-        return "";
+        WebAppSecurityConfig globalConfig = WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig();
+        if (globalConfig != null) {
+            return globalConfig.getChangedProperties(original);
+        } else {
+            return "";
+        }
+    }
+
+    /**
+     * {@inheritDoc}<p>
+     */
+    @Override
+    public Map<String, String> getChangedPropertiesMap(WebAppSecurityConfig original) {
+        WebAppSecurityConfig globalConfig = WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig();
+        if (globalConfig != null) {
+            return globalConfig.getChangedPropertiesMap(original);
+        } else {
+            return null;
+        }
     }
 
     /** {@inheritDoc} */
@@ -266,10 +283,31 @@ class FeatureWebSecurityConfigImpl implements WebAppSecurityConfig {
 
     /** {@inheritDoc} */
     @Override
+    public String getLoginErrorURL() {
+        WebAppSecurityConfig globalConfig = WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig();
+        if (globalConfig != null)
+            return WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig().getLoginErrorURL();
+        else
+            return null;
+
+    }
+
+    /** {@inheritDoc} */
+    @Override
     public boolean getAllowFailOverToFormLogin() {
         WebAppSecurityConfig globalConfig = WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig();
         if (globalConfig != null)
             return WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig().getAllowFailOverToFormLogin();
+        else
+            return false;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean getAllowFailOverToAppDefined() {
+        WebAppSecurityConfig globalConfig = WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig();
+        if (globalConfig != null)
+            return WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig().getAllowFailOverToAppDefined();
         else
             return false;
     }
@@ -320,5 +358,35 @@ class FeatureWebSecurityConfigImpl implements WebAppSecurityConfig {
     @Override
     public WebAuthenticatorProxy createWebAuthenticatorProxy() {
         return null;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public String getOverrideHttpAuthMethod() {
+        WebAppSecurityConfig globalConfig = WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig();
+        if (globalConfig != null)
+            return WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig().getOverrideHttpAuthMethod();
+        else
+            return null;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public String getLoginFormContextRoot() {
+        WebAppSecurityConfig globalConfig = WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig();
+        if (globalConfig != null)
+            return WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig().getLoginFormContextRoot();
+        else
+            return null;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public String getBasicAuthRealmName() {
+        WebAppSecurityConfig globalConfig = WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig();
+        if (globalConfig != null)
+            return WebAppSecurityCollaboratorImpl.getGlobalWebAppSecurityConfig().getBasicAuthRealmName();
+        else
+            return null;
     }
 }

@@ -16,7 +16,9 @@ import java.lang.annotation.Annotation;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
+import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.ws.rs.InternalServerErrorException;
 import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.ext.MessageBodyWriter;
@@ -24,11 +26,14 @@ import javax.ws.rs.sse.OutboundSseEvent;
 import javax.ws.rs.sse.SseEventSink;
 
 import org.apache.cxf.jaxrs.provider.ServerProviderFactory;
+import org.apache.cxf.jaxrs.sse.NoSuitableMessageBodyWriterException;
 import org.apache.cxf.jaxrs.utils.JAXRSUtils;
 import org.apache.cxf.message.Message;
+import org.apache.cxf.transport.http.AbstractHTTPDestination;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 
 /**
  * This class implements the <code>SseEventSink</code> that is injected into
@@ -40,6 +45,7 @@ public class LibertySseEventSinkImpl implements SseEventSink {
     private final MessageBodyWriter<OutboundSseEvent> writer;
     private final Message message;
     private final HttpServletResponse response;
+    private volatile boolean closed;
 
     public LibertySseEventSinkImpl(MessageBodyWriter<OutboundSseEvent> writer, Message message) {
         this.writer = writer;
@@ -49,7 +55,6 @@ public class LibertySseEventSinkImpl implements SseEventSink {
         message.getExchange().put(JAXRSUtils.IGNORE_MESSAGE_WRITERS, "true");
     }
 
-    private volatile boolean closed;
     /* (non-Javadoc)
      * @see javax.ws.rs.sse.SseEventSink#close()
      */
@@ -59,7 +64,11 @@ public class LibertySseEventSinkImpl implements SseEventSink {
             closed = true;
             try {
                 response.getOutputStream().close();
-            } catch (IOException ex) {
+                HttpServletRequest req = (HttpServletRequest) message.get(AbstractHTTPDestination.HTTP_REQUEST);
+                if (req != null) {
+                    req.getAsyncContext().complete();
+                }
+            } catch (Exception ex) {
                 if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                     Tr.debug(tc, "Failed to close response stream", ex);
                 }
@@ -83,44 +92,74 @@ public class LibertySseEventSinkImpl implements SseEventSink {
     /* (non-Javadoc)
      * @see javax.ws.rs.sse.SseEventSink#send(javax.ws.rs.sse.OutboundSseEvent)
      */
+    @FFDCIgnore({WebApplicationException.class, IOException.class, NoSuitableMessageBodyWriterException.class})
     @Override
     public CompletionStage<?> send(OutboundSseEvent event) {
         final CompletableFuture<?> future = new CompletableFuture<>();
 
-        if (!closed && writer != null) {
-            try (ByteArrayOutputStream os = new ByteArrayOutputStream()) {
-                writer.writeTo(event, event.getClass(), null, new Annotation [] {}, event.getMediaType(), null, os);
+        if (!closed) {
+            if (writer != null) {
+                ByteArrayOutputStream os = null;
+                try {
+                    os = new ByteArrayOutputStream();
+                    writer.writeTo(event, event.getClass(), null, new Annotation [] {}, event.getMediaType(), null, os);
 
-                String eventContents = os.toString();
+                    String eventContents = os.toString();
+                    if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                        Tr.debug(tc, "send - sending " + eventContents);
+                    }
+
+                    if (!response.isCommitted()) {
+                        response.setHeader("Content-Type", MediaType.SERVER_SENT_EVENTS);
+                        response.flushBuffer();
+                    }
+
+                    //TODO: this seems like a bug, but most SSE clients seem to expect a named event
+                    //      so for now, we will provide one if one is not provided by the user
+                    if (event.getName() == null) {
+                        response.getOutputStream().print("    UnnamedEvent\n");
+                    }
+                    response.getOutputStream().println(eventContents);
+                    response.getOutputStream().flush();
+
+                    return CompletableFuture.completedFuture(eventContents);
+                } catch (NoSuitableMessageBodyWriterException ex) {
+                    handleException(ex, future, event);
+                    throw new IllegalArgumentException("No suitable message body writer for OutboundSseEvent created with data " + event.getData() + " and mediaType " + event.getMediaType() + ". The data contained within the OutboundSseEvent must match the mediaType."); 
+                } catch (WebApplicationException ex) {
+                    handleException(ex, future, event);
+                } catch (IOException ex) {
+                    handleException(ex, future, event);
+                } finally {
+                    if (os != null) {
+                        try {
+                            os.close();
+                        } catch (IOException ex) {
+                            //ignore
+                        }
+                    }
+                }
+            } else {  //no writer
                 if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                    Tr.debug(tc, "send - sending " + eventContents);
+                    Tr.debug(tc, "No MessageBodyWriter - returning null for event:  " + event);
                 }
-                
-                if (!response.isCommitted()) {
-                    response.setHeader("Content-Type", MediaType.SERVER_SENT_EVENTS);
-                    response.flushBuffer();
-                }
-                
-                //TODO: this seems like a bug, but most SSE clients seem to expect a named event
-                //      so for now, we will provide one if one is not provided by the user
-                if (event.getName() == null) {
-                    response.getOutputStream().print("    UnnamedEvent\n");
-                }
-                response.getOutputStream().println(eventContents);
-                response.getOutputStream().flush();
-                
-                return CompletableFuture.completedFuture(eventContents);
-            } catch (WebApplicationException | IOException ex) {
-                //TODO: convert to warning?
-                if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
-                    Tr.debug(tc, "send - failed sending event " + event);
-                    future.completeExceptionally(ex);
-                }
-            }
+                future.complete(null);
+            }  
         } else {
-            future.complete(null);
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(tc, "SseEventSink is closed - failed sending event:  " + event);
+            }
+            throw new IllegalStateException("SseEventSink is closed.");  
         }
 
         return future;
+    }
+    
+    private void handleException(Throwable t, CompletableFuture future, OutboundSseEvent event) {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+            Tr.debug(tc, "send - failed sending event " + event);
+        }
+        future.completeExceptionally(t);
+        close();
     }
 }

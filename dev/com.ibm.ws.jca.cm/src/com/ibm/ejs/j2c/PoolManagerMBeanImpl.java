@@ -32,7 +32,6 @@ import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.ffdc.FFDCFilter;
 import com.ibm.ws.jca.cm.mbean.ConnectionManagerMBean;
-import com.ibm.ws.kernel.service.util.PrivHelper;
 
 public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionManagerMBean {
     private static final TraceComponent tc = Tr.register(PoolManagerMBeanImpl.class, J2CConstants.traceSpec, J2CConstants.messageFile);
@@ -94,7 +93,7 @@ public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionMan
         Hashtable<String, String> props = new Hashtable<String, String>();
         props.put("jmx.objectname", this.obn.toString());
 
-        this.reg = PrivHelper.registerService(bndCtx, ConnectionManagerMBean.class.getName(), this, props);
+        this.reg = ConnectionManagerServiceImpl.priv.registerService(bndCtx, ConnectionManagerMBean.class.getName(), this, props);
     }
 
     public void unregister() {
@@ -257,7 +256,7 @@ public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionMan
                             if (mcw.isDestroyState()
                                 || mcw.isStale()
                                 || mcw.hasFatalErrorNotificationOccurred(_pm.freePool[0].getFatalErrorNotificationTime())
-                                || ((_pm.agedTimeout != 0) && (mcw.hasAgedTimedOut(_pm.agedTimeoutMillis)))) {
+                                || ((_pm.agedTimeout != -1) && (mcw.hasAgedTimedOut(_pm.agedTimeoutMillis)))) {
                                 sharedBuf.append("ToBePurged");
                             }
                             sharedBuf.append(" thread=");
@@ -277,7 +276,7 @@ public class PoolManagerMBeanImpl extends StandardMBean implements ConnectionMan
                             // Check if connection is about to be purged
                             if (mcw.isStale()
                                 || mcw.hasFatalErrorNotificationOccurred(_pm.freePool[0].getFatalErrorNotificationTime())
-                                || ((_pm.agedTimeout != 0) && (mcw.hasAgedTimedOut(_pm.agedTimeoutMillis)))) {
+                                || ((_pm.agedTimeout != -1) && (mcw.hasAgedTimedOut(_pm.agedTimeoutMillis)))) {
                                 unsharedBuf.append("ToBePurged");
                             }
                             unsharedBuf.append(" thread=");

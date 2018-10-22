@@ -9,13 +9,18 @@
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
 
+plugins {
+  id "net.ossindex.audit" version "0.3.8-beta"
+}
+
+audit {
+    failOnError = true
+}
+
 compileTestJava {
+    inputs.files { rasInstrumentationInputFiles() }
     doLast {
-        ant.taskdef(name: 'instrumentWithFFDC', classname: 'com.ibm.ws.ras.instrument.internal.buildtasks.InstrumentWithFFDC') {
-            classpath {
-                fileset(dir: "${rootDir}/cnf/lib", includes: "ras-instrumentation.jar")
-            }
-        }
+        rasInstrumentationTaskdef(ant)
         ant.instrumentWithFFDC() {
             fileset(dir: compileTestJava.destinationDir) {
                 include(name: '**/com/ibm/ws/ras/instrumentation/test/*.class')

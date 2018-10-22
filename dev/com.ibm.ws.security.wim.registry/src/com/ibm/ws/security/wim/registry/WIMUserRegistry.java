@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2013 IBM Corporation and others.
+ * Copyright (c) 2012, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -47,6 +47,7 @@ import com.ibm.ws.security.wim.registry.util.SearchBridge;
 import com.ibm.ws.security.wim.registry.util.SecurityNameBridge;
 import com.ibm.ws.security.wim.registry.util.UniqueIdBridge;
 import com.ibm.ws.security.wim.registry.util.ValidBridge;
+import com.ibm.wsspi.security.wim.exception.NoUserRepositoriesFoundException;
 
 @ObjectClassDefinition(pid = "com.ibm.ws.security.wim.registry.WIMUserRegistry", name = Ext.INTERNAL, description = Ext.INTERNAL_DESC, localization = Ext.LOCALIZATION)
 @Ext.ObjectClassClass(FederationRegistry.class)
@@ -171,6 +172,15 @@ public class WIMUserRegistry implements FederationRegistry, UserRegistry {
             return returnValue;
         } catch (Exception excp) {
             if (excp instanceof RegistryException) {
+                Throwable t = excp.getCause();
+                if (t != null && t instanceof NoUserRepositoriesFoundException) {
+                    /**
+                     * Throw the original exception back to the user. Otherwise, they receive a misleading
+                     * message that their user was not found instead of the root of the problem (no registries
+                     * to search).
+                     */
+                    throw excp;
+                }
                 // New:: Change in Input/Output mapping
                 // throw (RegistryException) excp;
                 return null;
@@ -183,19 +193,20 @@ public class WIMUserRegistry implements FederationRegistry, UserRegistry {
     /** {@inheritDoc} */
     @Override
     @FFDCIgnore(Exception.class)
-    public String mapCertificate(X509Certificate inputCertificate) throws CertificateMapNotSupportedException, CertificateMapFailedException, RegistryException {
+    public String mapCertificate(X509Certificate[] chain) throws CertificateMapNotSupportedException, CertificateMapFailedException, RegistryException {
         try {
-            String returnValue = loginBridge.mapCertificate(inputCertificate);
+            String returnValue = loginBridge.mapCertificate(chain);
             return returnValue;
         } catch (Exception excp) {
-            if (excp instanceof CertificateMapFailedException)
-                throw (CertificateMapFailedException) excp.getCause();
-
-            else if (excp instanceof RegistryException)
+            if (excp instanceof CertificateMapFailedException) {
+                throw (CertificateMapFailedException) excp;
+            } else if (excp instanceof CertificateMapNotSupportedException) {
+                throw (CertificateMapNotSupportedException) excp;
+            } else if (excp instanceof RegistryException) {
                 throw (RegistryException) excp;
-
-            else
+            } else {
                 throw new RegistryException(excp.getMessage(), excp);
+            }
         }
     }
 

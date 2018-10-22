@@ -10,6 +10,8 @@
  *******************************************************************************/
 package com.ibm.jbatch.container.services;
 
+import java.util.Set;
+
 import javax.persistence.TypedQuery;
 
 import com.ibm.jbatch.container.persistence.jpa.JobInstanceEntity;
@@ -18,6 +20,11 @@ import com.ibm.jbatch.container.persistence.jpa.JobInstanceEntity;
  * Helper to translate search parameters into usable JPQL
  */
 public interface IJPAQueryHelper {
+
+    /**
+     * Base Query String
+     */
+    final String DEFAULT_QUERY = "SELECT x from JobInstanceEntity x ORDER BY x.createTime DESC";
 
     /**
      * Get the JPQL query string
@@ -30,8 +37,13 @@ public interface IJPAQueryHelper {
     void setQueryParameters(TypedQuery<JobInstanceEntity> query);
 
     /**
-     * Set a submitter id to handle authorization
+     * Set a query issuer id to handle authorization
      */
-    void setAuthSubmitter(String submitter);
+    void setQueryIssuer(String queryIssuer);
+
+    /**
+     * @param groupsForSubject
+     */
+    void setGroups(Set<String> groupsForSubject);
 
 }

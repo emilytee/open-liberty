@@ -20,6 +20,7 @@ import java.io.PrintWriter;
 import java.io.Writer;
 import java.lang.instrument.Instrumentation;
 import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -515,11 +516,17 @@ public class FrameworkManager {
         PlatformMBeanServerBuilder.addPlatformMBeanServerBuilderListener(new PlatformMBeanServerBuilderListener() {
             @Override
             @FFDCIgnore(IllegalStateException.class)
-            public void platformMBeanServerCreated(MBeanServerPipeline pipeline) {
+            public void platformMBeanServerCreated(final MBeanServerPipeline pipeline) {
                 if (pipeline != null) {
-                    Hashtable<String, String> svcProps = new Hashtable<String, String>();
+                    final Hashtable<String, String> svcProps = new Hashtable<String, String>();
                     try {
-                        systemContext.registerService(MBeanServerPipeline.class.getName(), pipeline, svcProps);
+                        AccessController.doPrivileged(new PrivilegedAction<Void>() {
+                            @Override
+                            public Void run() {
+                                systemContext.registerService(MBeanServerPipeline.class.getName(), pipeline, svcProps);
+                                return null;
+                            }
+                        });
                     } catch (IllegalStateException ise) { /* This instance of the system bundle is no longer valid. Ignore it. */
                     }
                 }
@@ -625,6 +632,14 @@ public class FrameworkManager {
             readyServiceRefs = systemBundleCtx.getServiceReferences(FrameworkReady.class, null);
         } catch (InvalidSyntaxException e) {
             throw new IllegalStateException(e); // unlikely.
+        } catch (IllegalStateException ex) {
+            // The framework might have been stopped before we finished starting
+            if (framework.getState() != Bundle.ACTIVE) {
+                waitForFrameworkStop();
+                return false;
+            } else {
+                throw ex;
+            }
         }
 
         // If we have any, we will wait for them...

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2003, 2017 IBM Corporation and others.
+ * Copyright (c) 2003, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -41,8 +41,8 @@ import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.ffdc.FFDCFilter;
 import com.ibm.ws.jca.adapter.WSConnectionManager;
+import com.ibm.ws.jca.cm.AbstractConnectionFactoryService;
 import com.ibm.ws.jdbc.internal.PropertyService;
-import com.ibm.ws.kernel.service.util.PrivHelper;
 import com.ibm.ws.resource.ResourceRefInfo;
 import com.ibm.ws.rsadapter.AdapterUtil;
 import com.ibm.ws.rsadapter.DSConfig;
@@ -126,7 +126,7 @@ public class DB2JCCHelper extends DB2Helper {
                            -1776);
 
         isRRSTransaction = false;
-        threadIdentitySupport = THREAD_IDENTITY_SUPPORT_NOTALLOWED;
+        threadIdentitySupport = AbstractConnectionFactoryService.THREAD_IDENTITY_NOT_ALLOWED;
         threadSecurity = false;
         boolean traceAppend = false;
         String traceDir = null;
@@ -156,12 +156,12 @@ public class DB2JCCHelper extends DB2Helper {
         //  we need to check whether the impl class has the  correct configuration for zOS. we can't do
         // this checking in the constructor since we don't have the properties at that time.
         if (localZOS && driverType == 2) {
-            String dsClassName = mcf.getDataSourceClass().getName();
+            String dsClassName = mcf.vendorImplClass.getName();
             if (dsClassName.equals("com.ibm.db2.jcc.DB2XADataSource")) {
                 throw new ResourceException(AdapterUtil.getNLSMessage("DB2ZOS_TYPE2_ERROR"));
             } else if (dsClassName.equals("com.ibm.db2.jcc.DB2ConnectionPoolDataSource")) {
                 isRRSTransaction = true;
-                threadIdentitySupport = THREAD_IDENTITY_SUPPORT_ALLOWED;
+                threadIdentitySupport = AbstractConnectionFactoryService.THREAD_IDENTITY_ALLOWED;
                 threadSecurity = true;
                 Tr.info(tc, "DB2ZOS_CONFIG_INFO");
             }
@@ -339,7 +339,7 @@ public class DB2JCCHelper extends DB2Helper {
         try {
             Method m = methRef.get();
             if (m == null) {
-                Class<?> c = PrivHelper.loadClass(mcf.jdbcDriverLoader, "com.ibm.db2.jcc.DB2Connection");
+                Class<?> c = WSManagedConnectionFactoryImpl.priv.loadClass(mcf.jdbcDriverLoader, "com.ibm.db2.jcc.DB2Connection");
                 methRef.set(m = c.getMethod(methName, paramTypes));
             }
 

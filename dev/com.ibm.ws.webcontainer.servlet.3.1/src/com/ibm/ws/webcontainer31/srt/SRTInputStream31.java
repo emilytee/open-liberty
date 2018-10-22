@@ -43,9 +43,9 @@ public class SRTInputStream31 extends SRTInputStream
     private SRTServletRequest31 request;
     private Object lockObj = new Object() {};
     private Object completeLockObj = new Object() {};  
-    private Boolean asyncReadOutstanding = false;
-    private Boolean readLineCall = false;
-    private Boolean isClosed = false;
+    private boolean asyncReadOutstanding = false;
+    private boolean readLineCall = false;
+    private boolean isClosed = false;
     private final static TraceComponent tc = Tr.register(SRTInputStream31.class, WebContainerConstants.TR_GROUP, WebContainerConstants.NLS_PROPS);
 
     /**
@@ -217,21 +217,13 @@ public class SRTInputStream31 extends SRTInputStream
         AsyncContext31Impl ac = (AsyncContext31Impl)request.getAsyncContext();
 
         try {
-            
-            
-            ReadListenerRunnable rlRunnable = new ReadListenerRunnable(tcm, this,ac);
-            
-            ac.setReadListenerRunning(true);
-            
-            com.ibm.ws.webcontainer.osgi.WebContainer.getExecutorService().execute(rlRunnable);
-            
+            ac.startReadListener(tcm, this);
         } catch (Exception e) {
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                 Tr.debug(tc, "An exception occurred while setting the ReadListener : " + e);
             }
             //There was a problem with the read so we should invoke their onError, since technically it's been set now
             this.listener.onError(e);
-            ac.setReadListenerRunning(false);
         }
         
         if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled())
@@ -406,8 +398,18 @@ public class SRTInputStream31 extends SRTInputStream
     }
     
         
-    public void setAsyncReadOutstanding(Boolean asyncReadOutstanding){
+    public void setAsyncReadOutstanding(boolean asyncReadOutstanding){
         this.asyncReadOutstanding = asyncReadOutstanding;
+    }
+    
+    /**
+     * Sets up for driving the read listener again on another thread.
+     */
+    public void prepareAsyncReadListener() {
+        // Need to call pre-join since the async read will occur on another
+        // thread.
+        AsyncContext31Impl ac = (AsyncContext31Impl)request.getAsyncContext();
+        ac.continueReadListener();
     }
     
     /**

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -49,10 +49,7 @@ public class JSFExtensionFactory implements ExtensionFactory {
     private static final String FACES_SERVLET_RESOURCE = "javax/faces/webapp/FacesServlet.class";
     private static final String SUN_CONFIGURE_LISTENER_CLASSNAME = "com.sun.faces.config.ConfigureListener";
     private static final String MYFACES_LIFECYCLE_LISTENER_CLASSNAME = "org.apache.myfaces.webapp.StartupServletContextListener";
-    //private static final String SUNRI_BUNDLE_JARNAME = "com.ibm.ws.jsf.RI1_2.jar";
-    //private static final String MYFACES_BUNDLE_JARNAME = "javax.j2ee.jsf.jar";
     private static final String sunRIClassToSearch = "com/sun/faces/vendor/WebSphereInjectionProvider.class";
-    //private static final String myFacesClassToSearch = "com/ibm/ws/jsf/config/annotation/WASMyFacesAnnotationProvider.class";
     private URL defaultFacesServlet = null;
     private String applicationName = null;
     private static final String SUN_LISTENER_REGISTERED_STRING = "sunListenerRegistered";
@@ -62,8 +59,6 @@ public class JSFExtensionFactory implements ExtensionFactory {
 
     /** Reference for delayed activation of ClassLoadingService */
     private final AtomicReference<ClassLoadingService> classLoadingSRRef = new AtomicReference<ClassLoadingService>(null);
-
-  //  private final AtomicServiceReference<BeanValidation> beanValidationSRRef = new AtomicServiceReference<BeanValidation>("beanValidation");
 
     private final static AtomicServiceReference<SerializationService> serializationServiceRef = new AtomicServiceReference<SerializationService>("serializationService");
 
@@ -81,13 +76,11 @@ public class JSFExtensionFactory implements ExtensionFactory {
     @SuppressWarnings("unchecked")
     public void activate(ComponentContext compcontext, Map<String, Object> properties) {
         instance.set(this);
-      //  this.beanValidationSRRef.activate(compcontext);
         this.serializationServiceRef.activate(compcontext);
         this.cdiJSFInitializerService.activate(compcontext);        
     }
 
     public void deactivate(ComponentContext compcontext) {
-      //  this.beanValidationSRRef.deactivate(compcontext);
         this.serializationServiceRef.deactivate(compcontext);
         this.cdiJSFInitializerService.deactivate(compcontext);
         instance.compareAndSet(this, null);
@@ -109,22 +102,6 @@ public class JSFExtensionFactory implements ExtensionFactory {
         classLoadingSRRef.set(null);
     }
 
-    // declarative service
-   // public void setBeanValidation(ServiceReference<BeanValidation> ref) {
-     //   beanValidationSRRef.setReference(ref);
-   // }
-
-    // declarative service
-   // public void unsetBeanValidation(ServiceReference<BeanValidation> ref) {
-     //   beanValidationSRRef.unsetReference(ref);
-
-   // }
-
-    //public BeanValidation getBeanValidation() {
-     //   return beanValidationSRRef.getService();
-
-   // }
-
     protected void setSerializationService(ServiceReference<SerializationService> ref) {
         serializationServiceRef.setReference(ref);
     }
@@ -136,33 +113,6 @@ public class JSFExtensionFactory implements ExtensionFactory {
     public static SerializationService getSerializationService() {
         return serializationServiceRef.getService();
     }
-
-   /* private void setValidatorFactoryAttribute(IServletContext ctxt) {
-
-        BeanValidation bv = getBeanValidation();
-        ComponentMetaData cmd = null;
-        ValidatorFactory vf = null;
-        if (bv != null) {
-            cmd = ComponentMetaDataAccessorImpl.getComponentMetaDataAccessor().getComponentMetaData();
-            if (cmd != null) {
-                try {
-                    vf = bv.getValidatorFactory(cmd);
-                    ctxt.setAttribute(javax.faces.validator.BeanValidator.VALIDATOR_FACTORY_KEY, vf);
-                    if (log.isLoggable(Level.FINE)) {
-                        log.logp(Level.FINE, CLASS_NAME, "setValidatorFactoryAttribute", "VALIDATOR_FACTORY_KEY set to: " + vf);
-                    }
-                } catch (ValidationException bve) {
-                    if (log.isLoggable(Level.FINE)) {
-                        log.logp(Level.FINE, CLASS_NAME, "setValidatorFactoryAttribute", "exception thrown while attempting to set the validator factory", bve);
-                    }
-                }
-            }
-        } else {
-            if (log.isLoggable(Level.FINE)) {
-                log.logp(Level.FINE, CLASS_NAME, "setValidatorFactoryAttribute", "bean validation service was null");
-            }
-        }
-    } */
 
     public ExtensionProcessor createExtensionProcessor(IServletContext webapp) throws Exception {
 
@@ -192,10 +142,6 @@ public class JSFExtensionFactory implements ExtensionFactory {
             log.logp(Level.FINE, CLASS_NAME, "createExtensionProcessor", "Exit createExtensionProcessor(): JSF is enabled for webapp: [" + applicationName
                                                                          + "] using implementation=[" + jsfImplEnabled + "]");
         }
-
-        //if (jsfImplEnabled == JSFImplEnabled.MyFaces) {
-        //    setValidatorFactoryAttribute(webapp);
-        //}
 
         return new JSFExtensionProcessor(webapp);
     }
@@ -353,11 +299,8 @@ public class JSFExtensionFactory implements ExtensionFactory {
             List listeners = config.getListeners();
             for (Object listener : listeners) {
                 String listenerClassname;
-                /*
-                 * if(listener instanceof JavaClassImpl)
-                 * listenerClassname = ((JavaClassImpl)listener).getQualifiedName();
-                 * else
-                 */if (listener instanceof String)
+
+                if (listener instanceof String)
                     listenerClassname = (String) listener;
                 else
                     continue; //skip this listener
@@ -400,16 +343,31 @@ public class JSFExtensionFactory implements ExtensionFactory {
         // end 233952: JSP_UPATE_CHECK fails for non-jsp requests.
     }
 
-    public static void initializeCDI(Application application){
+    public static void initializeCDIJSFELContextListenerAndELResolver(Application application){
         JSFExtensionFactory factory = instance.get();
         if(factory != null){
             if(factory.cdiJSFInitializerService != null){
                 CDIJSFInitializer cdiInitializer = factory.cdiJSFInitializerService.getService();
                 if(cdiInitializer != null){
                     if (log.isLoggable(Level.FINE)) {
-                        log.logp(Level.FINE, CLASS_NAME, "initializeCDI", "Initializing app with CDI");
+                        log.logp(Level.FINE, CLASS_NAME, "initializeCDIJSFELContextListenerAndELResolver", "Initializing app ELContextListener and ELResolver");
                     }
-                    cdiInitializer.initializeJSF(application);
+                    cdiInitializer.initializeCDIJSFELContextListenerAndELResolver(application);
+                }
+            }
+        }
+    }
+    
+    public static void initializeCDIJSFViewHandler(Application application){
+        JSFExtensionFactory factory = instance.get();
+        if(factory != null){
+            if(factory.cdiJSFInitializerService != null){
+                CDIJSFInitializer cdiInitializer = factory.cdiJSFInitializerService.getService();
+                if(cdiInitializer != null){
+                    if (log.isLoggable(Level.FINE)) {
+                        log.logp(Level.FINE, CLASS_NAME, "initializeCDIJSFViewHandler", "Initializing app ViewHandler");
+                    }
+                    cdiInitializer.initializeCDIJSFViewHandler(application);
                 }
             }
         }

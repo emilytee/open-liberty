@@ -1,11 +1,23 @@
-/*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
- * All rights reserved. This program and the accompanying materials
- * are made available under the terms of the Eclipse Public License v1.0
- * which accompanies this distribution, and is available at
- * http://www.eclipse.org/legal/epl-v10.html
- *
- * Contributors:
- *     IBM Corporation - initial API and implementation
- *******************************************************************************/
-apply from: '../cnf/gradle/scripts/fat.gradle'
+plugins {
+  id "net.ossindex.audit" version "0.3.8-beta"
+}
+
+audit {
+    failOnError = true
+}
+
+task addRequiredFiles(type: Copy) {
+  dependsOn ':com.ibm.ws.kernel.feature:jar'
+  from new File(projectDir, 'publish/files/sampleServer.xml')
+  into new File(autoFvtDir, 'lib/LibertyFATTestFiles/')
+  rename 'sampleServer.xml', 'productSampleServer.xml'
+  doLast {
+    ant.zip(destfile: new File(autoFvtDir, 'lib/LibertyFATTestFiles/wlp.lib.extract.zip')) {
+      zipfileset(src: new File(project(':com.ibm.ws.kernel.feature').buildDir, 'com.ibm.ws.kernel.feature.jar'), includes: 'wlp/**/*.class')
+    }
+  }
+}
+
+autoFVT {
+  dependsOn addRequiredFiles
+}

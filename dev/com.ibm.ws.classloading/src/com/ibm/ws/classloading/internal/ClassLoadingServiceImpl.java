@@ -34,6 +34,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.eclipse.equinox.region.RegionDigraph;
@@ -134,11 +135,6 @@ public class ClassLoadingServiceImpl implements LibertyClassLoadingService, Clas
                policyOption = ReferencePolicyOption.GREEDY)
     protected volatile List<ApplicationExtensionLibrary> appExtLibs;
 
-    @Override
-    public List<ApplicationExtensionLibrary> getAppExtLibs() {
-        return Collections.unmodifiableList(appExtLibs);
-    }
-
     /**
      * Mapping from META-INF services file names to the corresponding service provider implementation class name.
      */
@@ -155,6 +151,11 @@ public class ClassLoadingServiceImpl implements LibertyClassLoadingService, Clas
      * For converting type/app/module/comp to a metadata ID under getClassLoaderIdentifier.
      */
     protected MetaDataIdentifierService metadataIdentifierService;
+
+    /**
+     * reference to the global library - primarily used for dump introspector output
+     */
+    private final AtomicReference<Library> globalSharedLibrary = new AtomicReference<>();
 
     @Activate
     protected void activate(ComponentContext cCtx, Map<String, Object> properties) {
@@ -270,7 +271,13 @@ public class ClassLoadingServiceImpl implements LibertyClassLoadingService, Clas
 
     @Override
     public AppClassLoader createTopLevelClassLoader(List<Container> classPath, GatewayConfiguration gwConfig, ClassLoaderConfiguration clConfig) {
-        AppClassLoader result = new ClassLoaderFactory(bundleContext, digraph, classloaders, aclStore, resourceProviders, redefiner, generatorManager).setClassPath(classPath).configure(gwConfig).configure(clConfig).create();
+        if (clConfig.getIncludeAppExtensions())
+            addAppExtensionLibs(clConfig);
+        AppClassLoader result = new ClassLoaderFactory(bundleContext, digraph, classloaders, aclStore, resourceProviders, redefiner, generatorManager)
+                        .setClassPath(classPath)
+                        .configure(gwConfig)
+                        .configure(clConfig)
+                        .create();
 
         this.rememberBundle(result.getBundle());
         return result;
@@ -278,12 +285,22 @@ public class ClassLoadingServiceImpl implements LibertyClassLoadingService, Clas
 
     @Override
     public AppClassLoader createBundleAddOnClassLoader(List<File> classPath, ClassLoader gwClassLoader, ClassLoaderConfiguration clConfig) {
-        return new ClassLoaderFactory(bundleContext, digraph, classloaders, aclStore, resourceProviders, redefiner, generatorManager).setSharedLibPath(classPath).configure(createGatewayConfiguration()).useBundleAddOnLoader(gwClassLoader).configure(clConfig).create();
+        return new ClassLoaderFactory(bundleContext, digraph, classloaders, aclStore, resourceProviders, redefiner, generatorManager)
+                        .setSharedLibPath(classPath)
+                        .configure(createGatewayConfiguration())
+                        .useBundleAddOnLoader(gwClassLoader)
+                        .configure(clConfig)
+                        .create();
     }
 
     @Override
     public AppClassLoader createChildClassLoader(List<Container> classPath, ClassLoaderConfiguration config) {
-        return new ClassLoaderFactory(bundleContext, digraph, classloaders, aclStore, resourceProviders, redefiner, generatorManager).setClassPath(classPath).configure(config).create();
+        if (config.getIncludeAppExtensions())
+            addAppExtensionLibs(config);
+        return new ClassLoaderFactory(bundleContext, digraph, classloaders, aclStore, resourceProviders, redefiner, generatorManager)
+                        .setClassPath(classPath)
+                        .configure(config)
+                        .create();
     }
 
     @Override
@@ -381,9 +398,13 @@ public class ClassLoadingServiceImpl implements LibertyClassLoadingService, Clas
             }
         }
 
-        AppClassLoader result = new ClassLoaderFactory(bundleContext, digraph, classloaders, aclStore, resourceProviders, redefiner, generatorManager).configure(createGatewayConfiguration().setApplicationName(SHARED_LIBRARY_DOMAIN
-                                                                                                                                                                                                                 + ": "
-                                                                                                                                                                                                                 + lib.id()).setDynamicImportPackage("*").setApiTypeVisibility(apiTypeVisibility)).configure(clsCfg).onCreate(listenForLibraryChanges(lib.id())).getCanonical();
+        AppClassLoader result = new ClassLoaderFactory(bundleContext, digraph, classloaders, aclStore, resourceProviders, redefiner, generatorManager)
+                        .configure(createGatewayConfiguration().setApplicationName(SHARED_LIBRARY_DOMAIN + ": " + lib.id())
+                                        .setDynamicImportPackage("*")
+                                        .setApiTypeVisibility(apiTypeVisibility))
+                        .configure(clsCfg)
+                        .onCreate(listenForLibraryChanges(lib.id()))
+                        .getCanonical();
 
         this.rememberBundle(result.getBundle());
         return result;
@@ -474,7 +495,7 @@ public class ClassLoadingServiceImpl implements LibertyClassLoadingService, Clas
             @Override
             protected void update() {
                 Object cl = get();
-                if (cl instanceof AppClassLoader)
+                if (cl instanceof AppClassLoader && aclStore != null)
                     aclStore.remove((AppClassLoader) cl);
                 deregister();
             }
@@ -545,7 +566,10 @@ public class ClassLoadingServiceImpl implements LibertyClassLoadingService, Clas
          * Always create a new TCCL to handle features being added/removed
          */
 
-        GatewayConfiguration gwConfig = this.createGatewayConfiguration().setApplicationName("ThreadContextClassLoader").setDynamicImportPackage("*;thread-context=\"true\"").setDelegateToSystem(false);
+        GatewayConfiguration gwConfig = this.createGatewayConfiguration()
+                        .setApplicationName("ThreadContextClassLoader")
+                        .setDynamicImportPackage("*;thread-context=\"true\"")
+                        .setDelegateToSystem(false);
         ClassLoaderConfiguration clConfig = this.createClassLoaderConfiguration().setId(createIdentity("Thread Context", key));
         GatewayBundleFactory gatewayBundleFactory = new GatewayBundleFactory(bundleContext, digraph, classloaders);
         GatewayClassLoader aug = gatewayBundleFactory.createGatewayBundleClassLoader(gwConfig, clConfig, resourceProviders);
@@ -681,6 +705,10 @@ public class ClassLoadingServiceImpl implements LibertyClassLoadingService, Clas
         this.protectionDomainMap = protectionDomainMap;
     }
 
+    public void setGlobalSharedLibrary(Library gsl) {
+        this.globalSharedLibrary.set(gsl);
+    }
+
     /*
      * (non-Javadoc)
      *
@@ -732,6 +760,31 @@ public class ClassLoadingServiceImpl implements LibertyClassLoadingService, Clas
 
         out.println();
         out.println();
+
+        Library gsl = globalSharedLibrary.get();
+        if (gsl == null) {
+            out.println("Global Shared Library not configured");
+        } else {
+            out.println("Global Shared Library contents:");
+            out.println("  filesets:");
+            for (Fileset fileset : gsl.getFilesets()) {
+                String dir = fileset.getDir();
+                for (File file : fileset.getFileset()) {
+                    out.println("    " + dir + "  " + file.getPath());
+                }
+            }
+            out.println("  folders:");
+            for (File folder : gsl.getFolders()) {
+                out.println("    " + folder.getAbsolutePath());
+            }
+            out.println("  files:");
+            for (File file : gsl.getFiles()) {
+                out.println("    " + file.getAbsolutePath());
+            }
+        }
+
+        out.println();
+        out.println();
         out.println("Leaked (or active) TCCLs - note that tracing must be enabled to see these stacks:");
         for (Map.Entry<ClassLoader, StackTraceElement[]> entry : leakDetectionMap.entrySet()) {
             ClassLoader cl = entry.getKey();
@@ -741,5 +794,10 @@ public class ClassLoadingServiceImpl implements LibertyClassLoadingService, Clas
                 out.println("    " + ste.toString());
             }
         }
+    }
+
+    private void addAppExtensionLibs(ClassLoaderConfiguration config) {
+        for (ApplicationExtensionLibrary appExt : appExtLibs)
+            config.addSharedLibraries(appExt.getReference().id());
     }
 }

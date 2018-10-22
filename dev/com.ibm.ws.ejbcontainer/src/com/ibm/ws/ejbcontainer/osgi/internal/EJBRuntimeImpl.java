@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2017 IBM Corporation and others.
+ * Copyright (c) 2012, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -75,6 +75,7 @@ import com.ibm.ejs.container.EJSWrapperBase;
 import com.ibm.ejs.container.HomeOfHomes;
 import com.ibm.ejs.container.HomeRecord;
 import com.ibm.ejs.container.MDBInternalHome;
+import com.ibm.ejs.container.MessageEndpointCollaborator;
 import com.ibm.ejs.container.PersistentTimer;
 import com.ibm.ejs.container.PersistentTimerTaskHandler;
 import com.ibm.ejs.container.TimerNpImpl;
@@ -1080,8 +1081,15 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
     }
 
     public void stop(EJBModuleMetaDataImpl mmd) {
+
         String name = mmd.ivName;
         String appName = mmd.getEJBApplicationMetaData().getName();
+
+        if (!ejbRuntimeActive || metaDataService == null) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
+                Tr.debug(tc, "EJBRuntime deactivated, cannot stop module " + name + " in application " + appName);
+            return;
+        }
 
         try {
             Tr.info(tc, "STOPPING_MODULE_CNTR4003I", name, appName);
@@ -1387,6 +1395,9 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
                 if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled())
                     Tr.debug(tc, "Waiting for EJBRemoteRuntime failed: " + e);
             }
+            // Once one thread has completed the wait; no point in others continuing to wait
+            remoteFeatureLatch = null;
+            remoteLatch.countDown();
         }
     }
 
@@ -1497,17 +1508,23 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
 
     @Reference(name = "features", cardinality = ReferenceCardinality.MULTIPLE, policy = ReferencePolicy.DYNAMIC, policyOption = ReferencePolicyOption.GREEDY)
     protected void setLibertyFeature(ServiceReference<LibertyFeature> feature) {
-        String featureName = (String) feature.getProperty("ibm.featureName");
-        if (featureName != null && featureName.startsWith("ejbRemote")) {
-            remoteFeatureLatch = new CountDownLatch(1);
+        // If the remote runtime hasn't come up yet, but remote is configured,
+        // then create a latch to support a pause in starting remote EJBs.
+        if (ejbRemoteRuntimeServiceRef.getReference() == null) {
+            String featureName = (String) feature.getProperty("ibm.featureName");
+            if (featureName != null && featureName.startsWith("ejbRemote")) {
+                remoteFeatureLatch = new CountDownLatch(1);
+            }
         }
     }
 
     protected void unsetLibertyFeature(ServiceReference<LibertyFeature> feature) {
-        String featureName = (String) feature.getProperty("ibm.featureName");
-        if (featureName != null && featureName.startsWith("ejbRemote")) {
-            CountDownLatch remoteLatch = remoteFeatureLatch;
-            if (remoteLatch != null) {
+        // If the remote feature was configured, but never came up, and now
+        // is being removed, then also remove the remote latch.
+        CountDownLatch remoteLatch = remoteFeatureLatch;
+        if (remoteLatch != null) {
+            String featureName = (String) feature.getProperty("ibm.featureName");
+            if (featureName != null && featureName.startsWith("ejbRemote")) {
                 remoteLatch.countDown();
                 remoteFeatureLatch = null;
             }
@@ -1552,6 +1569,15 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
     }
 
     @Override
+    public MessageEndpointCollaborator getMessageEndpointCollaborator(BeanMetaData bmd) {
+        MDBRuntime mdbRuntime = getOSGiBeanMetaData(bmd).getMDBRuntime();
+        if (mdbRuntime != null) {
+            return mdbRuntime.getMessageEndpointCollaborator();
+        }
+        return null;
+    }
+
+    @Override
     public void resolveMessageDestinationJndiName(BeanMetaData bmd) {
         // On Liberty, handled in MDBRuntimeImpl.activateEndpoint; nothing to do here
     }
@@ -1579,6 +1605,14 @@ public class EJBRuntimeImpl extends AbstractEJBRuntime implements ApplicationSta
         }
 
         super.sendBindingMessage(bmd, beanName, interfaceName, interfaceIndex, local);
+    }
+
+    @Override
+    public boolean isRemoteSupported() {
+        if (remoteFeatureLatch != null || ejbRemoteRuntimeServiceRef.getReference() != null) {
+            return true;
+        }
+        return false;
     }
 
     @Override

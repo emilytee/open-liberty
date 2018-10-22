@@ -22,6 +22,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.Phaser;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.ThreadFactory;
@@ -40,6 +41,8 @@ import org.osgi.service.component.annotations.ReferencePolicy;
 
 import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
+import com.ibm.ws.kernel.service.util.CpuInfo;
+import com.ibm.ws.threading.ThreadQuiesce;
 import com.ibm.wsspi.threading.ExecutorServiceTaskInterceptor;
 import com.ibm.wsspi.threading.WSExecutorService;
 
@@ -50,11 +53,7 @@ import com.ibm.wsspi.threading.WSExecutorService;
            configurationPolicy = ConfigurationPolicy.REQUIRE,
            property = "service.vendor=IBM",
            service = { java.util.concurrent.ExecutorService.class, com.ibm.wsspi.threading.WSExecutorService.class })
-public final class ExecutorServiceImpl implements WSExecutorService {
-    /**
-     * Indicates whether we are on Java 6, because a workaround is needed for shutting down the thread pool in this case.
-     */
-    private static final boolean JAVA_6 = System.getProperty("java.version").equals("1.6.0");
+public final class ExecutorServiceImpl implements WSExecutorService, ThreadQuiesce {
 
     /**
      * The target ExecutorService.
@@ -66,7 +65,7 @@ public final class ExecutorServiceImpl implements WSExecutorService {
      * the underlying thread pool and adjust its size in an attempt to
      * maximize throughput.
      */
-    ThreadPoolController threadPoolController = new ThreadPoolController(this);
+    ThreadPoolController threadPoolController = null;
 
     /**
      * The thread pool name.
@@ -108,6 +107,8 @@ public final class ExecutorServiceImpl implements WSExecutorService {
      * The ThreadFactory used by the executor to create new threads.
      */
     ThreadFactory threadFactory = null;
+
+    private Boolean serverStopping = false;
 
     @Reference(cardinality = ReferenceCardinality.OPTIONAL,
                policy = ReferencePolicy.DYNAMIC,
@@ -174,7 +175,8 @@ public final class ExecutorServiceImpl implements WSExecutorService {
             return;
         }
 
-        threadPoolController.deactivate();
+        if (threadPoolController != null)
+            threadPoolController.deactivate();
 
         ThreadPoolExecutor oldPool = threadPool;
 
@@ -190,15 +192,11 @@ public final class ExecutorServiceImpl implements WSExecutorService {
         }
 
         if (coreThreads < 0) {
-            coreThreads = 2 * Runtime.getRuntime().availableProcessors();
+            coreThreads = 2 * CpuInfo.getAvailableProcessors();
         }
 
         // If coreThreads is greater than maxThreads, automatically lower it and proceed
         coreThreads = Math.min(coreThreads, maxThreads);
-
-        // Propagate the core and maximum threads to the controller
-        threadPoolController.setCoreThreads(coreThreads);
-        threadPoolController.setMaxThreads(maxThreads);
 
         BlockingQueue<Runnable> workQueue = new BoundedBuffer<Runnable>(java.lang.Runnable.class, 1000, 1000);
 
@@ -206,10 +204,63 @@ public final class ExecutorServiceImpl implements WSExecutorService {
 
         threadPool = new ThreadPoolExecutor(coreThreads, maxThreads, keepAliveMillis, TimeUnit.MILLISECONDS, workQueue, threadFactory != null ? threadFactory : new ThreadFactoryImpl(poolName, threadGroupName), rejectedExecutionHandler);
 
-        threadPoolController.activate(threadPool);
+        threadPoolController = new ThreadPoolController(this, threadPool);
 
         if (oldPool != null) {
             softShutdown(oldPool);
+        }
+    }
+
+    private class RunnableWrapper implements Runnable {
+
+        private final Runnable wrappedTask;
+
+        RunnableWrapper(Runnable r) {
+            this.wrappedTask = r;
+
+            phaser.register();
+        }
+
+        /*
+         * (non-Javadoc)
+         *
+         * @see java.lang.Runnable#run()
+         */
+        @Override
+        public void run() {
+            try {
+                this.wrappedTask.run();
+            } finally {
+
+                phaser.arriveAndDeregister();
+            }
+        }
+
+    }
+
+    // Used to keep track of the number of threads that are not finished
+    protected final Phaser phaser = new Phaser(1);
+
+    private class CallableWrapper<T> implements Callable<T> {
+        private final Callable<T> callable;
+
+        CallableWrapper(Callable<T> c) {
+            this.callable = c;
+            phaser.register();
+        }
+
+        /*
+         * (non-Javadoc)
+         *
+         * @see java.util.concurrent.Callable#call()
+         */
+        @Override
+        public T call() throws Exception {
+            try {
+                return this.callable.call();
+            } finally {
+                phaser.arriveAndDeregister();
+            }
         }
     }
 
@@ -276,35 +327,35 @@ public final class ExecutorServiceImpl implements WSExecutorService {
     @Override
     public <T> Future<T> submit(Callable<T> task) {
         threadPoolController.resumeIfPaused();
-        return threadPool.submit(interceptorsActive ? wrap(task) : task);
+        return threadPool.submit(createWrappedCallable(task));
     }
 
     /** {@inheritDoc} */
     @Override
     public Future<?> submit(Runnable task) {
         threadPoolController.resumeIfPaused();
-        return threadPool.submit(interceptorsActive ? wrap(task) : task);
+        return threadPool.submit(createWrappedRunnable(task));
     }
 
     /** {@inheritDoc} */
     @Override
     public <T> Future<T> submit(Runnable task, T result) {
         threadPoolController.resumeIfPaused();
-        return threadPool.submit(interceptorsActive ? wrap(task) : task, result);
+        return threadPool.submit(createWrappedRunnable(task), result);
     }
 
     /** {@inheritDoc} */
     @Override
     public void execute(Runnable command) {
         threadPoolController.resumeIfPaused();
-        threadPool.execute(interceptorsActive ? wrap(command) : command);
+        threadPool.execute(createWrappedRunnable(command));
     }
 
     /** {@inheritDoc} */
     @Override
     public void executeGlobal(Runnable command) {
         threadPoolController.resumeIfPaused();
-        threadPool.execute(interceptorsActive ? wrap(command) : command);
+        threadPool.execute(createWrappedRunnable(command));
     }
 
     /**
@@ -350,47 +401,6 @@ public final class ExecutorServiceImpl implements WSExecutorService {
         // code has a reference to it
         oldThreadPool.setKeepAliveTime(0, TimeUnit.SECONDS);
         oldThreadPool.setCorePoolSize(0);
-
-        // The following is a workaround for Java 6 bug 6450200:  http://bugs.java.com/view_bug.do?bug_id=6450200
-        //
-        // The bug is that when you lower coreThreads, existing idle threads may not be interrupted and thus may
-        // never go away if no more work is submitted to the executor.
-        //
-        // The workaround I am using is to submit dummy work to the executor until all of the idle threads go
-        // away.
-        //
-        // Note that another workaround exists:
-        //  1.  Set keepAlive=0 before coreThreads=0 (we are doing that anyway, but technically the
-        //      order shouldn't matter)
-        //  2.  Use a custom LinkedBlockingQueue extension that overrides the remainingCapacity() method
-        //      to always return 0
-        //
-        // I'm not using that workaround on a matter of principle because it causes remainingCapacity() to
-        // return an incorrect value and in theory (although extremely unlikely) someone could add code in
-        // the future that relies on a correct return value for that method.
-        if (JAVA_6 && ((oldThreadPool.getPoolSize() - oldThreadPool.getActiveCount()) > 0)) {
-            oldThreadPool.execute(new Runnable() {
-                @Override
-                @FFDCIgnore(InterruptedException.class)
-                public void run() {
-                    // submit 1 dummy task per idle thread, but because it may be possible for any given thread to
-                    // process more than 1 dummy task, we need to sleep and try again until the idle threads are gone
-                    int idleThreads;
-                    while ((idleThreads = oldThreadPool.getPoolSize() - oldThreadPool.getActiveCount()) > 0) {
-                        for (int i = 0; i < idleThreads; i++) {
-                            oldThreadPool.execute(new Runnable() {
-                                @Override
-                                public void run() {}
-                            });
-                        }
-                        try {
-                            Thread.sleep(1000);
-                        } catch (InterruptedException ie) {
-                        }
-                    }
-                }
-            });
-        }
     }
 
     /**
@@ -434,12 +444,29 @@ public final class ExecutorServiceImpl implements WSExecutorService {
         }
     }
 
+    private Runnable createWrappedRunnable(Runnable in) {
+        Runnable r = interceptorsActive ? wrap(in) : in;
+        if (serverStopping)
+            return r;
+
+        return new RunnableWrapper(r);
+    }
+
     Runnable wrap(Runnable r) {
         Iterator<ExecutorServiceTaskInterceptor> i = interceptors.iterator();
         while (i.hasNext()) {
             r = i.next().wrap(r);
         }
+
         return r;
+    }
+
+    private <T> Callable<T> createWrappedCallable(Callable<T> in) {
+
+        Callable<T> c = interceptorsActive ? wrap(in) : in;
+        if (serverStopping)
+            return c;
+        return new CallableWrapper<T>(c);
     }
 
     <T> Callable<T> wrap(Callable<T> c) {
@@ -447,15 +474,56 @@ public final class ExecutorServiceImpl implements WSExecutorService {
         while (i.hasNext()) {
             c = i.next().wrap(c);
         }
+
         return c;
     }
 
+    // This is private, so handling both interceptors and wrapping in this method for simplicity
     private <T> Collection<? extends Callable<T>> wrap(Collection<? extends Callable<T>> tasks) {
         List<Callable<T>> wrappedTasks = new ArrayList<Callable<T>>();
         Iterator<? extends Callable<T>> i = tasks.iterator();
         while (i.hasNext()) {
-            wrappedTasks.add(wrap(i.next()));
+            Callable<T> c = wrap(i.next());
+            if (serverStopping)
+                wrappedTasks.add(c);
+            else
+                wrappedTasks.add(new CallableWrapper<T>(c));
         }
         return wrappedTasks;
     }
+
+    /*
+     * (non-Javadoc)
+     *
+     * @see com.ibm.ws.threading.ThreadQuiesce#quiesceThreads()
+     */
+    @Override
+    @FFDCIgnore(TimeoutException.class)
+    public boolean quiesceThreads() {
+        this.serverStopping = true;
+
+        try {
+            // Wait 30 seconds for all pre-quiesce work to complete
+            phaser.arriveAndDeregister();
+            phaser.awaitAdvanceInterruptibly(0, 30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            //FFDC and fail quiesce notification
+            return false;
+        } catch (TimeoutException e) {
+            // If we time out, quiesce has failed. This is normal, so no FFDC.
+            return false;
+        }
+
+        return true;
+    }
+
+    @Override
+    public int getActiveThreads() {
+        int count = phaser.getUnarrivedParties();
+        if (this.serverStopping)
+            return count;
+
+        return count - 1;
+    }
+
 }

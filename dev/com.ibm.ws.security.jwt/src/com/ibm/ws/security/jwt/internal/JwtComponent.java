@@ -6,7 +6,7 @@
  * http://www.eclipse.org/legal/epl-v10.html
  *
  * Contributors:
- *     IBM Corporation - initial API and implementation
+ * IBM Corporation - initial API and implementation
  *******************************************************************************/
 package com.ibm.ws.security.jwt.internal;
 
@@ -39,9 +39,9 @@ import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Sensitive;
 import com.ibm.ws.security.common.jwk.impl.JWKProvider;
-import com.ibm.ws.security.common.jwk.interfaces.JSONWebKey;
 import com.ibm.ws.security.jwt.config.JwtConfig;
 import com.ibm.ws.security.jwt.utils.JwtUtils;
+import com.ibm.ws.webcontainer.security.jwk.JSONWebKey;
 
 @Component(service = JwtConfig.class, immediate = true, configurationPolicy = ConfigurationPolicy.REQUIRE, configurationPid = "com.ibm.ws.security.jwt.builder", name = "jwtConfig", property = "service.vendor=IBM")
 public class JwtComponent implements JwtConfig {
@@ -51,6 +51,7 @@ public class JwtComponent implements JwtConfig {
     private String issuer = null;
     private String issuerUrl = null;
     private long valid;
+    private long expiresInSeconds;
     private boolean isJwkEnabled;
     private boolean jti;
     private List<String> audiences;
@@ -137,6 +138,7 @@ public class JwtComponent implements JwtConfig {
         isJwkEnabled = (Boolean) props.get(JwtUtils.CFG_KEY_JWK_ENABLED);
         jti = (Boolean) props.get(JwtUtils.CFG_KEY_JTI);
         valid = ((Long) props.get(JwtUtils.CFG_KEY_VALID)).longValue();
+        expiresInSeconds = ((Long) props.get(JwtUtils.CFG_KEY_EXPIRES_IN_SECONDS)).longValue();
         sigAlg = JwtUtils.trimIt((String) props.get(JwtUtils.CFG_KEY_SIGNATURE_ALGORITHM));
         audiences = JwtUtils.trimIt((String[]) props.get(JwtUtils.CFG_KEY_AUDIENCES));
         scope = JwtUtils.trimIt((String) props.get(JwtUtils.CFG_KEY_SCOPE));
@@ -160,6 +162,13 @@ public class JwtComponent implements JwtConfig {
 
         if ("RS256".equals(sigAlg)) {
             initializeJwkProvider(this);
+        }
+
+        //expiresInSeconds wins if present
+        if (expiresInSeconds > -1) {
+            valid = expiresInSeconds;
+        } else {
+            valid = valid * 3600;
         }
     }
 
@@ -203,7 +212,7 @@ public class JwtComponent implements JwtConfig {
 
     @Override
     public long getValidTime() {
-        // TODO Auto-generated method stub
+        // Converted from hours to seconds 5/2018
         return valid;
     }
 

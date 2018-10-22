@@ -17,20 +17,20 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import org.eclipse.microprofile.config.spi.ConfigSource;
-
+import com.ibm.websphere.ras.Tr;
+import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.websphere.ras.annotation.Trivial;
 import com.ibm.ws.microprofile.config.interfaces.ConfigConstants;
 
 /**
  *
  */
-public class SystemConfigSource extends AbstractConfigSource implements ConfigSource {
+public class SystemConfigSource extends InternalConfigSource implements StaticConfigSource {
 
-    /**
-     * @param ordinal
-     */
+    private static final TraceComponent tc = Tr.register(SystemConfigSource.class);
+
     public SystemConfigSource() {
-        super(getSystemOrdinal(), "System Properties Config Source");
+        super(getSystemOrdinal(), Tr.formatMessage(tc, "system.properties.config.source"));
     }
 
     /** {@inheritDoc} */
@@ -40,12 +40,15 @@ public class SystemConfigSource extends AbstractConfigSource implements ConfigSo
         Properties sysProps = getSystemProperties();
         Set<String> keys = sysProps.stringPropertyNames();
         for (String key : keys) {
-            props.put(key, sysProps.getProperty(key));
+            if (key != null) {
+                props.put(key, sysProps.getProperty(key));
+            }
         }
 
         return props;
     }
 
+    @Trivial
     public static int getSystemOrdinal() {
         String ordinalProp = getOrdinalSystemProperty();
         int ordinal = ConfigConstants.ORDINAL_SYSTEM_PROPERTIES;
@@ -55,9 +58,11 @@ public class SystemConfigSource extends AbstractConfigSource implements ConfigSo
         return ordinal;
     }
 
+    @Trivial
     private static String getOrdinalSystemProperty() {
         String prop = AccessController.doPrivileged(new PrivilegedAction<String>() {
             @Override
+            @Trivial
             public String run() {
                 return System.getProperty(ConfigConstants.ORDINAL_PROPERTY);
             }
@@ -65,9 +70,11 @@ public class SystemConfigSource extends AbstractConfigSource implements ConfigSo
         return prop;
     }
 
+    @Trivial
     private static Properties getSystemProperties() {
         Properties prop = AccessController.doPrivileged(new PrivilegedAction<Properties>() {
             @Override
+            @Trivial
             public Properties run() {
                 return System.getProperties();
             }

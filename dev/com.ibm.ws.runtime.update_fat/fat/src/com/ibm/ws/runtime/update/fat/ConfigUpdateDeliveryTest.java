@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2014 IBM Corporation and others.
+ * Copyright (c) 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -24,13 +24,16 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.jboss.shrinkwrap.api.spec.WebArchive;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TestName;
 
+import com.ibm.websphere.simplicity.ShrinkHelper;
 import com.ibm.websphere.simplicity.log.Log;
+
 import componenttest.topology.impl.LibertyServer;
 import componenttest.topology.impl.LibertyServerFactory;
 
@@ -75,6 +78,10 @@ public class ConfigUpdateDeliveryTest {
     @BeforeClass
     public static void setUp() throws Exception {
         server.startServer();
+
+        WebArchive dropinsApp = ShrinkHelper.buildDefaultApp("mbean", "web");
+        ShrinkHelper.exportDropinAppToServer(server, dropinsApp);
+
     }
 
     @AfterClass
@@ -109,7 +116,7 @@ public class ConfigUpdateDeliveryTest {
 
             boolean foundPass = false;
 
-            // Pass criteria: 
+            // Pass criteria:
             // - No FAIL: lines
             // - at least one PASS line
 
@@ -139,7 +146,7 @@ public class ConfigUpdateDeliveryTest {
     /**
      * This method is used to get a connection stream from an HTTP connection. It
      * gives the output from the webpage that it gets from the connection
-     * 
+     *
      * @param con The connection to the HTTP address
      * @return The Output from the webpage
      */
@@ -152,7 +159,7 @@ public class ConfigUpdateDeliveryTest {
 
     /**
      * This method creates a connection to a webpage and then reutrns the connection
-     * 
+     *
      * @param url The Http Address to connect to
      * @return The connection to the http address
      */

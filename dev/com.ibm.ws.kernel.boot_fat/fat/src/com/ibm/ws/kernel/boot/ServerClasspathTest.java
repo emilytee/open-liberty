@@ -15,9 +15,12 @@ import static org.junit.Assert.assertEquals;
 import java.util.Iterator;
 import java.util.List;
 
+import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
+
+import com.ibm.websphere.simplicity.ShrinkHelper;
 
 import componenttest.annotation.MinimumJavaLevel;
 import componenttest.topology.impl.LibertyServer;
@@ -26,7 +29,7 @@ import componenttest.topology.impl.LibertyServerFactory;
 /**
  * Tests what can and cannot be loaded by the server's JVM classpath.
  */
-@MinimumJavaLevel(javaLevel = 1.7)
+@MinimumJavaLevel(javaLevel = 7)
 public class ServerClasspathTest {
 
     private static final String SERVER_NAME = "com.ibm.ws.kernel.boot.classpath.fat";
@@ -40,11 +43,16 @@ public class ServerClasspathTest {
                                                         "org.omg.CORBA", "com.sun", "org.xml.sax", "com.ibm.jit",
                                                         "com.ibm.jsse2", "com.ibm.lang.management", "com.ibm.tools.attach",
                                                         "com.ibm.virtualization.management", "com.ibm.wsspi.kernel",
-                                                        "jdk." // Java 9
+                                                        "com.ibm.ws.staticvalue", "com.ibm.java.lang.management.internal",
+                                                        "org.ietf.jgss", "jdk", // Java 9
+                                                        "com.ibm.sharedclasses.spi", // Open JDK 9
+                                                        "openj9"
     };
 
     @BeforeClass
     public static void before() throws Exception {
+        JavaArchive archive = ShrinkHelper.buildJavaArchive("checkJvmAppClasspath", "com.ibm.ws.kernel.boot.app.classpath");
+        ShrinkHelper.exportAppToServer(server, archive);
         server.startServer();
     }
 

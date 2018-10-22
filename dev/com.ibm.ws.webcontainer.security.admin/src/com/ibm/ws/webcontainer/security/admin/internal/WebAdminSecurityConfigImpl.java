@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2011 IBM Corporation and others.
+ * Copyright (c) 2011, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -44,6 +44,10 @@ class WebAdminSecurityConfigImpl implements WebAppSecurityConfig {
     private final Boolean ssoUseDomainFromURL = false;
     private final Boolean useAuthenticationDataForUnprotectedResource = true;
     private final Boolean allowFailOverToFormLogin = true;
+    // in order to maintain the original behavior, APP_DEFINED is not supported.
+    // if APP_DEFINED is supported, if login_config in web.xml is set as CLIENT_CERT,
+    // it no longer can failover to FORM.
+    private final Boolean allowFailOverToAppDefined = false;
     private final Boolean includePathInWASReqURL = false;
     private final Boolean trackLoggedOutSSOCookies = false;
     private final Boolean useOnlyCustomCookieName = false;
@@ -185,12 +189,34 @@ class WebAdminSecurityConfigImpl implements WebAppSecurityConfig {
     }
 
     /**
+     * {@inheritDoc}<p>
+     * This does not need an implemented as the Admin Application security
+     * configuration properties never change.
+     *
+     * @return {@code null}
+     */
+    @Override
+    public Map<String, String> getChangedPropertiesMap(WebAppSecurityConfig original) {
+        return null;
+    }
+
+    /**
      * {@inheritDoc} Admin Applications do not have a default Form Login URL.
      *
      * @return {@code null}
      */
     @Override
     public String getLoginFormURL() {
+        return null;
+    }
+
+    /**
+     * {@inheritDoc} Admin Applications do not have a default Form Error URL.
+     *
+     * @return {@code null}
+     */
+    @Override
+    public String getLoginErrorURL() {
         return null;
     }
 
@@ -202,8 +228,14 @@ class WebAdminSecurityConfigImpl implements WebAppSecurityConfig {
 
     /** {@inheritDoc} */
     @Override
+    public boolean getAllowFailOverToAppDefined() {
+        return allowFailOverToAppDefined;
+    }
+
+    /** {@inheritDoc} */
+    @Override
     public boolean allowFailOver() {
-        return allowFailOverToBasicAuth || allowFailOverToFormLogin;
+        return allowFailOverToBasicAuth || allowFailOverToFormLogin || allowFailOverToAppDefined;
     }
 
     /** {@inheritDoc} */
@@ -236,4 +268,21 @@ class WebAdminSecurityConfigImpl implements WebAppSecurityConfig {
         return null;
     }
 
+    /** {@inheritDoc} */
+    @Override
+    public String getOverrideHttpAuthMethod() {
+        return null;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public String getLoginFormContextRoot() {
+        return null;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public String getBasicAuthRealmName() {
+        return null;
+    }
 }

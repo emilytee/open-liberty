@@ -18,6 +18,11 @@ import java.util.TreeSet;
 
 import org.eclipse.microprofile.config.spi.ConfigSource;
 
+import com.ibm.websphere.ras.annotation.Trivial;
+
+/**
+ * Contains a set of ConfigSources, sorted by ordinal, highest value first
+ */
 public class SortedSources implements Iterable<ConfigSource> {
 
     private SortedSet<ConfigSource> sources;
@@ -31,6 +36,7 @@ public class SortedSources implements Iterable<ConfigSource> {
         sources.addAll(initialSources);
     }
 
+    @Trivial
     public SortedSources unmodifiable() {
         sources = Collections.unmodifiableSortedSet(sources);
         return this;
@@ -39,12 +45,14 @@ public class SortedSources implements Iterable<ConfigSource> {
     /**
      * @param toAdd
      */
+    @Trivial
     public void addAll(Collection<ConfigSource> toAdd) {
         sources.addAll(toAdd);
     }
 
     /** {@inheritDoc} */
     @Override
+    @Trivial
     public Iterator<ConfigSource> iterator() {
         return sources.iterator();
     }
@@ -52,13 +60,14 @@ public class SortedSources implements Iterable<ConfigSource> {
     /**
      * @return
      */
+    @Trivial
     public int size() {
         return sources.size();
     }
 
     @Override
     public String toString() {
-        StringBuilder builder = new StringBuilder("Config Sources: ");
+        StringBuilder builder = new StringBuilder("Sorted Sources: ");
         for (ConfigSource source : this) {
             builder.append("\n\t");
             builder.append(source.getOrdinal());
@@ -71,6 +80,7 @@ public class SortedSources implements Iterable<ConfigSource> {
     /**
      * CURRENTLY ONLY USED BY UNIT TEST
      */
+    @Trivial
     public void add(ConfigSource source) {
         sources.add(source);
     }

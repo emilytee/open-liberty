@@ -1,12 +1,14 @@
--include= ${workspace}/generated.properties
 
 releaseTypeGA=true
-libertyServiceVersion=17.0.0.3
-libertyBetaVersion=2017.9.0.0
+
+libertyBaseVersion=18.0.0
+libertyFixpackVersion=4
+libertyServiceVersion=${libertyBaseVersion}.${libertyFixpackVersion}
+libertyBetaVersion=2018.9.0.0
 libertyRelease=${if;${releaseTypeGA};${libertyServiceVersion};${libertyBetaVersion}}
 
-libertyBundleMicroVersion=18
-copyrightBuildYear=2017
+libertyBundleMicroVersion=23
+copyrightBuildYear=2018
 buildID=${libertyRelease}-${buildLabel}
 productEdition=BASE_ILAN
 productLicenseType=ILAN

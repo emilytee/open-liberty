@@ -189,7 +189,15 @@ public class AsyncContextImpl implements AsyncContext {
                 //after a previous complete, you can get a NPE because the
                 //request may have already been cleaned up. If complete is not
                 //pending, then it shouldn't have been cleaned up.
-                iExtendedRequest.setAsyncStarted(false);
+                
+                if (com.ibm.ws.webcontainer.osgi.WebContainer.getServletContainerSpecLevel() > 31) {
+                    //setAsyncStarted(false) upon exit service()
+                    WebContainerRequestState reqState = WebContainerRequestState.getInstance(true);
+                    reqState.setAttribute("webcontainer.resetAsyncStartedOnExit", "true"); 
+                }
+                else {
+                    iExtendedRequest.setAsyncStarted(false);
+                }
 
                 createNewAsyncServletReeentrantLock();
 
@@ -821,6 +829,10 @@ public class AsyncContextImpl implements AsyncContext {
     // Start:PM90834
     protected void captureContext () {
         this.serviceWrapper = new ServiceWrapper(this);
+        
+        if (com.ibm.ejs.ras.TraceComponent.isAnyTracingEnabled() && logger.isLoggable(Level.FINEST))           
+            logger.logp(Level.FINEST, CLASS_NAME, "captureContext","created ServiceWrapper [" + this.serviceWrapper +"] for context " + this );
+        
         this.serviceWrapper.pushContextData();
     }
     // End:PM90834

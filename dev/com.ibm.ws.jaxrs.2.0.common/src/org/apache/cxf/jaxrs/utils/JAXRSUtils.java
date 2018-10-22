@@ -38,7 +38,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +45,7 @@ import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.logging.Level;
 
 import javax.ws.rs.Consumes;
 import javax.ws.rs.HttpMethod;
@@ -88,6 +88,7 @@ import org.apache.cxf.common.util.ReflectionUtil;
 import org.apache.cxf.common.util.StringUtils;
 import org.apache.cxf.helpers.DOMUtils;
 import org.apache.cxf.interceptor.Fault;
+import org.apache.cxf.io.ReaderInputStream;
 import org.apache.cxf.jaxrs.JAXRSServiceImpl;
 import org.apache.cxf.jaxrs.ext.ContextProvider;
 import org.apache.cxf.jaxrs.ext.DefaultMethod;
@@ -151,8 +152,8 @@ public final class JAXRSUtils {
     public static final String ROOT_PROVIDER = "service.root.provider";
     public static final String EXCEPTION_FROM_MAPPER = "exception.from.mapper";
     public static final String SECOND_JAXRS_EXCEPTION = "second.jaxrs.exception";
-    public static final String PARTIAL_HIERARCHICAL_MEDIA_SUBTYPE_CHECK = 
-        "media.subtype.partial.check"; 
+    public static final String PARTIAL_HIERARCHICAL_MEDIA_SUBTYPE_CHECK =
+        "media.subtype.partial.check";
     public static final String DOC_LOCATION = "wadl.location";
     public static final String MEDIA_TYPE_Q_PARAM = "q";
     public static final String MEDIA_TYPE_QS_PARAM = "qs";
@@ -172,7 +173,7 @@ public final class JAXRSUtils {
     private static final Set<Class<?>> STREAMING_OUT_TYPES = new HashSet<Class<?>>(
         Arrays.asList(InputStream.class, Reader.class, StreamingOutput.class));
 
-    private JAXRSUtils() {        
+    private JAXRSUtils() {
     }
     public static boolean isStreamingOutType(Class<?> type) {
         return STREAMING_OUT_TYPES.contains(type);
@@ -261,7 +262,7 @@ public final class JAXRSUtils {
             }
         }
         // Param methods
-        MultivaluedMap<String, String> values = 
+        MultivaluedMap<String, String> values =
             (MultivaluedMap<String, String>)message.get(URITemplate.TEMPLATE_PARAMETERS);
         for (Method m : bri.getParameterMethods()) {
             Parameter p = ResourceUtils.getParameter(0, m.getAnnotations(),
@@ -322,7 +323,7 @@ public final class JAXRSUtils {
                    ? Collections.singletonMap(resources.get(0), values) : null;
         }
 
-        SortedMap<ClassResourceInfo, MultivaluedMap<String, String>> candidateList = 
+        SortedMap<ClassResourceInfo, MultivaluedMap<String, String>> candidateList =
             new TreeMap<ClassResourceInfo, MultivaluedMap<String, String>>(
                 new ClassResourceInfoComparator(message));
 
@@ -340,7 +341,7 @@ public final class JAXRSUtils {
         }
 
         if (!candidateList.isEmpty()) {
-            Map<ClassResourceInfo, MultivaluedMap<String, String>> cris = 
+            Map<ClassResourceInfo, MultivaluedMap<String, String>> cris =
                 new LinkedHashMap<ClassResourceInfo, MultivaluedMap<String, String>>(candidateList.size());
             ClassResourceInfo firstCri = null;
             for (Map.Entry<ClassResourceInfo, MultivaluedMap<String, String>> entry : candidateList.entrySet()) {
@@ -371,9 +372,10 @@ public final class JAXRSUtils {
                                                          String requestContentType,
                                                          List<MediaType> acceptContentTypes) {
         return findTargetMethod(matchedResources, message, httpMethod, matchedValues,
-                                requestContentType, acceptContentTypes, true);
+                                requestContentType, acceptContentTypes, true, true);
     }
 
+    //CHECKSTYLE:OFF
     public static OperationResourceInfo findTargetMethod(
                                                          Map<ClassResourceInfo, MultivaluedMap<String, String>> matchedResources,
                                                          Message message,
@@ -381,8 +383,9 @@ public final class JAXRSUtils {
                                                          MultivaluedMap<String, String> matchedValues,
                                                          String requestContentType,
                                                          List<MediaType> acceptContentTypes,
-                                                         boolean throwException) {
-
+                                                         boolean throwException,
+                                                         boolean recordMatchedUri) {
+        //CHECKSTYLE:ON
         final boolean isFineLevelLoggable = TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled();
         final boolean getMethod = HttpMethod.GET.equals(httpMethod);
 
@@ -393,9 +396,9 @@ public final class JAXRSUtils {
             throw ExceptionUtils.toNotSupportedException(ex, null);
         }
 
-        SortedMap<OperationResourceInfo, MultivaluedMap<String, String>> candidateList = 
+        SortedMap<OperationResourceInfo, MultivaluedMap<String, String>> candidateList =
             new TreeMap<OperationResourceInfo, MultivaluedMap<String, String>>(
-                new OperationResourceInfoComparator(message, httpMethod, 
+                new OperationResourceInfoComparator(message, httpMethod,
                                                     getMethod, requestType, acceptContentTypes));
 
         int pathMatched = 0;
@@ -410,8 +413,8 @@ public final class JAXRSUtils {
 
             String path = getCurrentPath(values);
             if (isFineLevelLoggable) {
-                org.apache.cxf.common.i18n.Message msg = 
-                    new org.apache.cxf.common.i18n.Message("START_OPER_MATCH", 
+                org.apache.cxf.common.i18n.Message msg =
+                    new org.apache.cxf.common.i18n.Message("START_OPER_MATCH",
                                                            BUNDLE,
                                                            resource.getServiceClass().getName());
                 Tr.debug(tc, msg.toString());
@@ -496,7 +499,9 @@ public final class JAXRSUtils {
             // need to check httpmethod as well for OPTIONS
             //if (!("OPTIONS".equalsIgnoreCase(httpMethod) && ori.getHttpMethod() == null)) {
 
-            pushOntoStack(ori, matchedValues, message);
+            if (recordMatchedUri) {
+                pushOntoStack(ori, matchedValues, message);
+            }
             return ori;
 
             //}
@@ -521,11 +526,11 @@ public final class JAXRSUtils {
             // Not a single Produces match
             status = 406;
         }
-        Map.Entry<ClassResourceInfo, MultivaluedMap<String, String>> firstCri = 
+        Map.Entry<ClassResourceInfo, MultivaluedMap<String, String>> firstCri =
             matchedResources.entrySet().iterator().next();
         String name = firstCri.getKey().isRoot() ? "NO_OP_EXC" : "NO_SUBRESOURCE_METHOD_FOUND";
-        org.apache.cxf.common.i18n.Message errorMsg = 
-            new org.apache.cxf.common.i18n.Message(name, 
+        org.apache.cxf.common.i18n.Message errorMsg =
+            new org.apache.cxf.common.i18n.Message(name,
                                                    BUNDLE,
                                                    message.get(Message.REQUEST_URI),
                                                    getCurrentPath(firstCri.getValue()),
@@ -535,13 +540,30 @@ public final class JAXRSUtils {
         if (!"OPTIONS".equalsIgnoreCase(httpMethod)) {
             Tr.warning(tc, errorMsg.toString());
         }
-        Response response = 
+        Response response =
             createResponse(getRootResources(message), message, errorMsg.toString(), status, methodMatched == 0);
         throw ExceptionUtils.toHttpException(null, response);
 
     }
 
-    public static List<MediaType> intersectSortMediaTypes(List<MediaType> acceptTypes,
+    public static Level getExceptionLogLevel(Message message, Class<? extends WebApplicationException> exClass) {
+        Level logLevel = null;
+        Object logLevelProp = message.get(exClass.getName() + ".log.level");
+        if (logLevelProp != null) {
+            if (logLevelProp instanceof Level) {
+                logLevel = (Level) logLevelProp;
+            } else {
+                try {
+                    logLevel = Level.parse(logLevelProp.toString());
+                } catch (Exception ex) {
+                    // ignore
+                }
+            }
+        }
+        return logLevel;
+    }
+
+    private static List<MediaType> intersectSortMediaTypes(List<MediaType> acceptTypes,
                                                           List<MediaType> producesTypes,
                                                           final boolean checkDistance) {
         List<MediaType> all = intersectMimeTypes(acceptTypes, producesTypes, true, checkDistance);
@@ -592,8 +614,8 @@ public final class JAXRSUtils {
 
     private static void logNoMatchMessage(OperationResourceInfo ori,
                                           String path, String httpMethod, MediaType requestType, List<MediaType> acceptContentTypes) {
-        org.apache.cxf.common.i18n.Message errorMsg = 
-            new org.apache.cxf.common.i18n.Message("OPER_NO_MATCH", 
+        org.apache.cxf.common.i18n.Message errorMsg =
+            new org.apache.cxf.common.i18n.Message("OPER_NO_MATCH",
                                                    BUNDLE,
                                                    ori.getMethodToInvoke().getName(),
                                                    path,
@@ -839,15 +861,23 @@ public final class JAXRSUtils {
                                            Parameter parameter,
                                            MultivaluedMap<String, String> values,
                                            Message message,
-                                           OperationResourceInfo ori) 
+                                           OperationResourceInfo ori)
         throws IOException, WebApplicationException {
-        InputStream is = message.getContent(InputStream.class);
-
         if (parameter.getType() == ParameterType.REQUEST_BODY) {
 
             if (parameterClass == AsyncResponse.class) {
                 return new AsyncResponseImpl(message);
             }
+
+            // Liberty change start
+            InputStream is = message.getContent(InputStream.class);
+            if (is == null) {
+                Reader reader = message.getContent(Reader.class);
+                if (reader != null) {
+                    is = new ReaderInputStream(reader);
+                }
+            }
+            // Liberty change end
 
             String contentType = (String) message.get(Message.CONTENT_TYPE);
 
@@ -972,8 +1002,8 @@ public final class JAXRSUtils {
         MediaType mt = mc.getHttpHeaders().getMediaType();
 
         @SuppressWarnings("unchecked")
-        MultivaluedMap<String, String> params = 
-            (MultivaluedMap<String, String>)m.get(FormUtils.FORM_PARAM_MAP); 
+        MultivaluedMap<String, String> params =
+            (MultivaluedMap<String, String>)m.get(FormUtils.FORM_PARAM_MAP);
 
         if (params == null) {
             params = new MetadataMap<String, String>();
@@ -989,9 +1019,9 @@ public final class JAXRSUtils {
                     MultipartBody body = AttachmentUtils.getMultipartBody(mc);
                     FormUtils.populateMapFromMultipart(params, body, m, decode);
                 } else {
-                    org.apache.cxf.common.i18n.Message errorMsg = 
-                        new org.apache.cxf.common.i18n.Message("WRONG_FORM_MEDIA_TYPE", 
-                                                               BUNDLE, 
+                    org.apache.cxf.common.i18n.Message errorMsg =
+                        new org.apache.cxf.common.i18n.Message("WRONG_FORM_MEDIA_TYPE",
+                                                               BUNDLE,
                                                                mt.toString());
                     Tr.warning(tc, errorMsg.toString());
                     throw ExceptionUtils.toNotSupportedException(null, null);
@@ -1134,11 +1164,11 @@ public final class JAXRSUtils {
         } else if (Configuration.class.isAssignableFrom(clazz)) {
             o = ProviderFactory.getInstance(contextMessage).getConfiguration(contextMessage);
         } else if (Application.class.isAssignableFrom(clazz)) {
-            ProviderInfo<?> providerInfo = 
+            ProviderInfo<?> providerInfo =
                 (ProviderInfo<?>)contextMessage.getExchange().getEndpoint().get(Application.class.getName());
             o = providerInfo == null ? null : providerInfo.getProvider();
         } else if (contextMessage != null) {
-            ContextProvider<?> provider = 
+            ContextProvider<?> provider =
                 ProviderFactory.getInstance(contextMessage).createContextProvider(clazz, contextMessage);
             if (provider != null) {
                 o = provider.createContext(contextMessage);
@@ -1243,7 +1273,7 @@ public final class JAXRSUtils {
                                                                      String sep,
                                                                      boolean decode,
                                                                      boolean decodePlus) {
-        MultivaluedMap<String, String> map = 
+        MultivaluedMap<String, String> map =
             new MetadataMap<String, String>(new LinkedHashMap<String, List<String>>());
 
         getStructuredParams(map, query, sep, decode, decodePlus);
@@ -1269,11 +1299,11 @@ public final class JAXRSUtils {
             List<String> parts = Arrays.asList(StringUtils.split(query, sep));
             for (String part : parts) {
                 int index = part.indexOf('=');
-                String name = null;
+                final String name;
                 String value = null;
                 if (index == -1) {
                     name = part;
-                    value = "";
+                    value = ""; //Liberty change - this probably shouldn't have been removed from CXF
                 } else {
                     name = part.substring(0, index);
                     value = index < part.length() ? part.substring(index + 1) : "";
@@ -1296,12 +1326,13 @@ public final class JAXRSUtils {
                                                boolean decode,
                                                boolean decodePlus) {
 
-        if (decodePlus && value.contains("+")) {
-            value = value.replace('+', ' ');
-        }
-        if (decode) {
-            value = (";".equals(sep))
-                ? HttpUtils.pathDecode(value) : HttpUtils.urlDecode(value); 
+        if (value != null) {
+            if (decodePlus && value.contains("+")) {
+                value = value.replace('+', ' ');
+            }
+            if (decode) {
+                value = (";".equals(sep)) ? HttpUtils.pathDecode(value) : HttpUtils.urlDecode(value);
+            }
         }
 
         queries.add(HttpUtils.urlDecode(name), value);
@@ -1368,9 +1399,9 @@ public final class JAXRSUtils {
         // Verbose but avoids an extra context instantiation for the typical path
         if (readers.size() > 1) {
             ReaderInterceptor first = readers.remove(0);
-            ReaderInterceptorContext context = new ReaderInterceptorContextImpl(targetTypeClass, 
-                                                                            parameterType, 
-                                                                            parameterAnnotations, 
+            ReaderInterceptorContext context = new ReaderInterceptorContextImpl(targetTypeClass,
+                                                                            parameterType,
+                                                                            parameterAnnotations,
                                                                             is,
                                                                             m,
                                                                             readers);
@@ -1414,13 +1445,13 @@ public final class JAXRSUtils {
         if (writers.size() > 1) {
             WriterInterceptor first = writers.remove(0);
             WriterInterceptorContext context = new WriterInterceptorContextImpl(entity,
-                                                                                type, 
-                                                                            genericType, 
+                                                                                type,
+                                                                            genericType,
                                                                             annotations,
                                                                             entityStream,
                                                                             message,
                                                                             writers);
-            
+
             first.aroundWriteTo(context);
         } else {
             final MessageBodyWriter<Object> writer = ((WriterInterceptorMBW) writers.get(0)).getMBW();
@@ -1457,22 +1488,19 @@ public final class JAXRSUtils {
 
     public static boolean matchConsumeTypes(MediaType requestContentType,
                                             OperationResourceInfo ori) {
-
-        return !intersectMimeTypes(ori.getConsumeTypes(), requestContentType).isEmpty();
+        return doMimeTypesIntersect(ori.getConsumeTypes(), requestContentType);
     }
 
     public static boolean matchProduceTypes(MediaType acceptContentType,
                                             OperationResourceInfo ori) {
-
-        return !intersectMimeTypes(ori.getProduceTypes(), acceptContentType).isEmpty();
+        return doMimeTypesIntersect(ori.getProduceTypes(), acceptContentType);
     }
 
     public static boolean matchMimeTypes(MediaType requestContentType,
                                          MediaType acceptContentType,
                                          OperationResourceInfo ori) {
-
-        return intersectMimeTypes(ori.getConsumeTypes(), requestContentType).size() != 0
-            && intersectMimeTypes(ori.getProduceTypes(), acceptContentType).size() != 0;
+        return doMimeTypesIntersect(ori.getConsumeTypes(), requestContentType)
+                && doMimeTypesIntersect(ori.getProduceTypes(), acceptContentType);
     }
 
     public static List<MediaType> parseMediaTypes(String types) {
@@ -1497,6 +1525,16 @@ public final class JAXRSUtils {
         return acceptValues;
     }
 
+    public static boolean doMimeTypesIntersect(List<MediaType> mimeTypesA, MediaType mimeTypeB) {
+        return doMimeTypesIntersect(mimeTypesA, Collections.singletonList(mimeTypeB));
+                            }
+
+    public static boolean doMimeTypesIntersect(List<MediaType> requiredMediaTypes, List<MediaType> userMediaTypes) {
+        final NonAccumulatingIntersector intersector = new NonAccumulatingIntersector();
+        intersectMimeTypes(requiredMediaTypes, userMediaTypes, intersector);
+        return intersector.doIntersect();
+    }
+
     /**
      * intersect two mime types
      *
@@ -1514,7 +1552,14 @@ public final class JAXRSUtils {
                                                      List<MediaType> userMediaTypes,
                                                      boolean addRequiredParamsIfPossible,
                                                      boolean addDistanceParameter) {
-        Set<MediaType> supportedMimeTypeList = new LinkedHashSet<MediaType>();
+        final AccumulatingIntersector intersector = new AccumulatingIntersector(addRequiredParamsIfPossible,
+                addDistanceParameter);
+        intersectMimeTypes(requiredMediaTypes, userMediaTypes, intersector);
+        return new ArrayList<>(intersector.getSupportedMimeTypeList());
+    }
+
+    private static void intersectMimeTypes(List<MediaType> requiredMediaTypes, List<MediaType> userMediaTypes,
+                                           MimeTypesIntersector intersector) {
 
         for (MediaType requiredType : requiredMediaTypes) {
             for (MediaType userType : userMediaTypes) {
@@ -1523,9 +1568,10 @@ public final class JAXRSUtils {
                     boolean parametersMatched = true;
                     for (Map.Entry<String, String> entry : userType.getParameters().entrySet()) {
                         String value = requiredType.getParameters().get(entry.getKey());
-                        if (value != null && !value.equals(entry.getValue())) {
-                            if (HTTP_CHARSET_PARAM.equals(entry.getKey())
-                                && value.equalsIgnoreCase(entry.getValue())) {
+                        if (value != null && entry.getValue() != null && !(stripDoubleQuotesIfNeeded(value)
+                                .equals(stripDoubleQuotesIfNeeded(entry.getValue())))) {
+
+                            if (HTTP_CHARSET_PARAM.equals(entry.getKey()) && value.equalsIgnoreCase(entry.getValue())) {
                                 continue;
                             }
                             parametersMatched = false;
@@ -1535,41 +1581,24 @@ public final class JAXRSUtils {
                     if (!parametersMatched) {
                         continue;
                     }
-                    boolean requiredTypeWildcard = requiredType.getType().equals(MediaType.MEDIA_TYPE_WILDCARD);
-                    boolean requiredSubTypeWildcard = requiredType.getSubtype().contains(MediaType.MEDIA_TYPE_WILDCARD);
 
-                    String type = requiredTypeWildcard ? userType.getType() : requiredType.getType();
-                    String subtype = requiredSubTypeWildcard ? userType.getSubtype() : requiredType.getSubtype();
-
-                    Map<String, String> parameters = userType.getParameters();
-                    if (addRequiredParamsIfPossible) {
-                        parameters = new LinkedHashMap<String, String>(parameters);
-                        for (Map.Entry<String, String> entry : requiredType.getParameters().entrySet()) {
-                            if (!parameters.containsKey(entry.getKey())) {
-                                parameters.put(entry.getKey(), entry.getValue());
-                            }
-                        }
+                    if (!intersector.intersect(requiredType, userType)) {
+                        return;
                     }
-                    if (addDistanceParameter) {
-                        int distance = 0;
-                        if (requiredTypeWildcard) {
-                            distance++;
-                        }
-                        if (requiredSubTypeWildcard) {
-                            distance++;
-                        }
-                        parameters.put(MEDIA_TYPE_DISTANCE_PARAM, Integer.toString(distance));
-                    }
-                    supportedMimeTypeList.add(new MediaType(type, subtype, parameters));
                 }
             }
         }
-
-        return new ArrayList<MediaType>(supportedMimeTypeList);
-
     }
 
-    public static boolean isMediaTypeCompatible(MediaType requiredType, MediaType userType) {
+    private static String stripDoubleQuotesIfNeeded(String value) {
+        if (value != null && value.startsWith("\"")
+            && value.endsWith("\"") && value.length() > 1) {
+            value = value.substring(1, value.length() - 1);
+        }
+        return value;
+    }
+
+    private static boolean isMediaTypeCompatible(MediaType requiredType, MediaType userType) {
         boolean isCompatible = requiredType.isCompatible(userType);
         if (!isCompatible && requiredType.getType().equalsIgnoreCase(userType.getType())) {
             isCompatible = compareCompositeSubtypes(requiredType, userType,
@@ -1705,7 +1734,7 @@ public final class JAXRSUtils {
     public static boolean runContainerRequestFilters(ServerProviderFactory pf,
                                                      Message m,
                                                      boolean preMatch,
-                                                     Set<String> names) {
+                                                     Set<String> names) throws IOException {
         //Liberty Defect 170924: Check @NameBinding on Application first
         Set<String> appNameBindings = AnnotationUtils.getNameBindings(pf.getApplicationProvider().getResourceClass().getAnnotations());
         if (names != null) {
@@ -1718,12 +1747,8 @@ public final class JAXRSUtils {
         if (!containerFilters.isEmpty()) {
             ContainerRequestContext context = new ContainerRequestContextImpl(m, preMatch, false);
             for (ProviderInfo<ContainerRequestFilter> filter : containerFilters) {
-                try {
-                    InjectionUtils.injectContexts(filter.getProvider(), filter, m);
-                    filter.getProvider().filter(context);
-                } catch (IOException ex) {
-                    throw ExceptionUtils.toInternalServerErrorException(ex, null);
-                }
+                InjectionUtils.injectContexts(filter.getProvider(), filter, m);
+                filter.getProvider().filter(context);
                 Response response = m.getExchange().get(Response.class);
                 if (response != null) {
                     setMessageContentType(m, response);
@@ -1750,12 +1775,12 @@ public final class JAXRSUtils {
 
         List<ProviderInfo<ContainerResponseFilter>> containerFilters = pf.getContainerResponseFilters(names);
         if (!containerFilters.isEmpty()) {
-            ContainerRequestContext requestContext = 
-                new ContainerRequestContextImpl(m.getExchange().getInMessage(), 
+            ContainerRequestContext requestContext =
+                new ContainerRequestContextImpl(m.getExchange().getInMessage(),
                                                false,
                                                true);
-            ContainerResponseContext responseContext = 
-                new ContainerResponseContextImpl(r, m, 
+            ContainerResponseContext responseContext =
+                new ContainerResponseContextImpl(r, m,
                     ori == null ? null : ori.getClassResourceInfo().getServiceClass(), invoked);
             for (ProviderInfo<ContainerResponseFilter> filter : containerFilters) {
                 InjectionUtils.injectContexts(filter.getProvider(), filter, m);
@@ -1765,7 +1790,7 @@ public final class JAXRSUtils {
     }
 
     public static String mediaTypeToString(MediaType mt, String... ignoreParams) {
-        List<String> list = ignoreParams == null || ignoreParams.length == 0 ? null 
+        List<String> list = ignoreParams == null || ignoreParams.length == 0 ? null
             : Arrays.asList(ignoreParams);
 
         return MediaTypeHeaderProvider.typeToString(mt, list);
@@ -1796,8 +1821,14 @@ public final class JAXRSUtils {
     }
 
     public static ResponseBuilder fromResponse(Response response) {
+        return fromResponse(response, true);
+    }
+
+    public static ResponseBuilder fromResponse(Response response, boolean copyEntity) {
         ResponseBuilder rb = toResponseBuilder(response.getStatus());
-        rb.entity(response.getEntity());
+        if (copyEntity) {
+            rb.entity(response.getEntity());
+        }
         for (Map.Entry<String, List<Object>> entry : response.getMetadata().entrySet()) {
             List<Object> values = entry.getValue();
             for (Object value : values) {
@@ -1815,7 +1846,7 @@ public final class JAXRSUtils {
                 Class<?> declClass = f.getType();
                 if (declClass == Annotation[].class) {
                     try {
-                        Annotation[] fieldAnnotations = 
+                        Annotation[] fieldAnnotations =
                             ReflectionUtil.accessDeclaredField(f, response, Annotation[].class);
                         ((ResponseImpl) r).setEntityAnnotations(fieldAnnotations);
                     } catch (Throwable ex) {
@@ -1852,22 +1883,28 @@ public final class JAXRSUtils {
             values = Collections.emptyList();
         } else {
             values = new ArrayList<String>(params.size() - 1);
-            for (Parameter pm : ori.getParameters()) {
-                if (pm.getType() == ParameterType.PATH) {
-                    List<String> paramValues = params.get(pm.getName());
-                    if (paramValues != null) {
-                        values.addAll(paramValues);
-                    }
-
-                }
-            }
+            addTemplateVarValues(values, params, ori.getClassResourceInfo().getURITemplate());
+            addTemplateVarValues(values, params, ori.getURITemplate());
         }
         Class<?> realClass = ori.getClassResourceInfo().getServiceClass();
         stack.push(new MethodInvocationInfo(ori, realClass, values));
     }
 
+    private static void addTemplateVarValues(List<String> values,
+                                             MultivaluedMap<String, String> params,
+                                             URITemplate template) {
+        if (template != null) {
+            for (String var : template.getVariables()) {
+                List<String> paramValues = params.get(var);
+                if (paramValues != null) {
+                    values.addAll(paramValues);
+                }
+            }
+        }
+    }
+
     public static String logMessageHandlerProblem(String name, Class<?> cls, MediaType ct) {
-        org.apache.cxf.common.i18n.Message errorMsg = 
+        org.apache.cxf.common.i18n.Message errorMsg =
             new org.apache.cxf.common.i18n.Message(name, BUNDLE, cls.getName(), mediaTypeToString(ct));
         String errorMessage = errorMsg.toString();
         Tr.error(tc, errorMessage);

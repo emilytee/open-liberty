@@ -1,0 +1,11 @@
+<client>
+    <featureManager>
+        <feature>javaeeClient-7.0</feature>
+        <feature>timedexit-1.0</feature>
+    </featureManager>
+    
+    <javaPermission className="java.util.PropertyPermission"  name="*" actions="read" />
+    
+   <application id="ApacheBvalConfig" name="ApacheBvalConfig" type="ear" location="ApacheBvalConfig.ear"/>
+   
+</client>

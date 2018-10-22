@@ -10,19 +10,6 @@
  *******************************************************************************/
 package com.ibm.ws.sib.api.jms.impl;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.io.Serializable;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
-
-import javax.jms.JMSException;
-import javax.jms.MessageFormatException;
-import javax.jms.ObjectMessage;
-
 import com.ibm.ejs.ras.TraceNLS;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.sib.api.jms.ApiJmsConstants;
@@ -30,7 +17,22 @@ import com.ibm.ws.serialization.DeserializationObjectInputStream;
 import com.ibm.ws.sib.mfp.JsJmsMessage;
 import com.ibm.ws.sib.mfp.JsJmsObjectMessage;
 import com.ibm.ws.sib.mfp.MessageCreateFailedException;
+import com.ibm.ws.sib.mfp.ObjectFailedToSerializeException;
+import com.ibm.ws.sib.utils.SerializedObjectInfoHelper;
 import com.ibm.ws.sib.utils.ras.SibTr;
+
+import javax.jms.JMSException;
+import javax.jms.MessageFormatException;
+import javax.jms.ObjectMessage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.ObjectStreamClass;
+import java.io.Serializable;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 
 /**
  * @author matrober
@@ -52,13 +54,6 @@ public class JmsObjectMessageImpl extends JmsMessageImpl implements ObjectMessag
      * the setup done by instantiateMessage!
      */
     private JsJmsObjectMessage objMsg;
-
-    /**
-     * This variable holds a cache of the message toString at the Message level.
-     * A separate cache holds the subclass information. The cache is invalidated
-     * by changing any property of the message.
-     */
-    private transient String cachedObjectToString = null;
 
     // *************************** TRACE INITIALIZATION **************************
     private static TraceComponent tc = SibTr.register(JmsObjectMessageImpl.class, ApiJmsConstants.MSG_GROUP_EXT, ApiJmsConstants.MSG_BUNDLE_EXT);
@@ -141,36 +136,11 @@ public class JmsObjectMessageImpl extends JmsMessageImpl implements ObjectMessag
 
     /**
      * Override the Message.toString to include some information about the object
-     * being stored. No point in caching the name of the class though.
+     * being stored.
      */
     @Override
     public String toString() {
-        String val = super.toString();
-
-        if (cachedObjectToString == null) {
-            String objString = null;
-            Object obj = null;
-            try {
-                obj = getObjectInternal();
-                if (obj == null) {
-                    objString = "<null>";
-                }
-                else {
-                    objString = obj.getClass().toString();
-                }
-            } catch (Exception e) {
-                // No FFDC code needed
-                String reason = nls.getFormattedMessage("DESERIALIZATION_EXCEPTION_CWSIA0122",
-                                                        new Object[] { e.getClass().getName() + ": " + e.getMessage() }, null);
-                objString = reason;
-                // NB It's important not to try and generate an FFDC here as it can result in
-                //    recursion and stack overflow.
-            }
-
-            cachedObjectToString = objString;
-        }
-
-        return val + "\n" + cachedObjectToString;
+        return String.format("%s%n%s", super.toString(), getObjectInfo());
     }
 
     // ********************* INTERFACE METHODS ***********************
@@ -208,9 +178,6 @@ public class JmsObjectMessageImpl extends JmsMessageImpl implements ObjectMessag
                 // Store the serialized object in the MFP component.
                 objMsg.setSerializedObject(baos.toByteArray());
             }
-
-            // Clear the cached string
-            cachedObjectToString = null;
         }
 
         catch (IOException e) {
@@ -272,6 +239,55 @@ public class JmsObjectMessageImpl extends JmsMessageImpl implements ObjectMessag
     }
 
     //******************** IMPLEMENTATION METHODS **********************
+
+    /**
+     * Gets a description of the class for the object payload.
+     * @return String describing the object payload's class
+     */
+    private String getObjectInfo() {
+        if (consumerWontModifyPayloadAfterGet) {
+            try {
+                return getObjectInfoFromRealObject();
+            } catch (Exception e) {
+            }
+        }
+        return getObjectInfoFromSerializedObject();
+    }
+
+    private static final String HEADER_PAYLOAD_SIZE = "Object payload size";
+    private static final String HEADER_PAYLOAD_OBJ  = "Object payload class";
+
+    /**
+     * Gets a description of the class for the object payload from the real object.
+     * @return String describing the object payload's class
+     */
+    private String getObjectInfoFromRealObject() throws IOException, ClassNotFoundException {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) SibTr.entry(this, tc, "getObjectInfoFromRealObject");
+        final Serializable obj = objMsg.getRealObject();
+        final String oscDesc = (obj == null) ? "null" : ObjectStreamClass.lookupAny(obj.getClass()).toString();
+        final String result = String.format("%s: %s", HEADER_PAYLOAD_OBJ, oscDesc);
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) SibTr.exit(this, tc, "getObjectInfoFromRealObject", result);
+        return result;
+    }
+
+    /**
+     * Gets a description of the class for the object payload from the serialized data.
+     * @return String decribing the object payload's class
+     */
+    private String getObjectInfoFromSerializedObject() {
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) SibTr.entry(this, tc, "getObjectInfoFromSerializedObject");
+        String oscDesc;
+        byte[] data = new byte[0];
+        try {
+            data = objMsg.getSerializedObject();
+            oscDesc = SerializedObjectInfoHelper.getObjectInfo(data);
+        } catch (ObjectFailedToSerializeException e) {
+            oscDesc = String.format("unserializable class: %s", e.getExceptionInserts()[0]);
+        }
+        final String result = String.format("%s: %d%n%s: %s", HEADER_PAYLOAD_SIZE, data.length, HEADER_PAYLOAD_OBJ, oscDesc);
+        if (TraceComponent.isAnyTracingEnabled() && tc.isEntryEnabled()) SibTr.exit(this, tc, "getObjectInfoFromSerializedObject", result);
+        return result;
+    }
 
     /**
      * This method deserializes the object but does not handle any exception

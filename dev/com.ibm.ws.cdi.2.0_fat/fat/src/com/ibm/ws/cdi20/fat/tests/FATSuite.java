@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -16,7 +16,15 @@ import org.junit.runners.Suite.SuiteClasses;
 
 @RunWith(Suite.class)
 @SuiteClasses({
+                AsyncEventsTest.class,
                 BeanManagerLookupTest.class,
+                BuiltinAnnoLiteralsTest.class,
+                CDIContainerConfigTest.class,
+                ConfiguratorTest.class,
+                InterceptionFactoryTest.class,
+                TrimTest.class,
+                SecureAsyncEventsTest.class,
+                SecureAsyncEventsAS20Test.class,
 })
 public class FATSuite {
 

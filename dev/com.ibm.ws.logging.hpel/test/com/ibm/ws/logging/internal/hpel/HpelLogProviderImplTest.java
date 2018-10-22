@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2013 IBM Corporation and others.
+ * Copyright (c) 2012, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -65,7 +65,7 @@ public class HpelLogProviderImplTest {
         bootConfig.put("com.ibm.hpel.text.includeTrace", "true");
 
         // Enable all the messages via bootstrap property
-        bootConfig.put("com.ibm.ws.logging.trace.specification", "*=all");
+        bootConfig.put("com.ibm.ws.logging.trace.specification", "com.*=all:org.*=all");
 
         provider.configure(bootConfig, CommonUtils.LOG_DIR, CommonUtils.TEXT_FACTORY);
 
@@ -78,15 +78,15 @@ public class HpelLogProviderImplTest {
         TraceComponent tc = Tr.register(getClass());
 
         String[] msgs = {
-                         "audit message",
-                         "debug message",
-                         "Dump: dump message",
-                         "Entry ",
-                         "error message",
-                         "event message",
-                         "Exit ",
-                         "fatal message",
-                         "info message"
+                          "audit message",
+                          "debug message",
+                          "Dump: dump message",
+                          "Entry ",
+                          "error message",
+                          "event message",
+                          "Exit ",
+                          "fatal message",
+                          "info message"
         };
         Tr.audit(tc, msgs[0]);
         Tr.debug(tc, msgs[1]);
@@ -105,11 +105,12 @@ public class HpelLogProviderImplTest {
         RepositoryReaderImpl reader = new RepositoryReaderImpl(CommonUtils.LOG_DIR);
         int count = 0;
         for (RepositoryLogRecord record : reader.getLogListForCurrentServerInstance()) {
+            String formattedMessage = record.getFormattedMessage();
             if (count > 0) { // First one is a message about trace specification change.
                 if (count > msgs.length) {
-                    fail("Unexpected message: " + record.getFormattedMessage());
+                    fail("Unexpected message: " + formattedMessage);
                 }
-                assertEquals("Record has incorrect formatted message", msgs[count - 1], record.getFormattedMessage());
+                assertEquals("Record has incorrect formatted message", msgs[count - 1], formattedMessage);
             }
             count++;
         }

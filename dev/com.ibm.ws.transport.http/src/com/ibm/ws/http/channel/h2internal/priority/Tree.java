@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2017 IBM Corporation and others.
+ * Copyright (c) 1997, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -99,7 +99,7 @@ public class Tree {
         if (parentNode != null) {
 
             // found the node that is to be the parent
-            nodeToAdd.setParent(parentNode);
+            nodeToAdd.setParent(parentNode, true);
 
             if (exclusive) {
 
@@ -301,12 +301,13 @@ public class Tree {
                 if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
                     Tr.debug(tc, "node stream-id: " + n.getStreamID() + " will now have a parent stream of: " + depNode.getStreamID());
                 }
-                n.setParent(depNode);
+                n.setParent(depNode, false);
             }
         }
+        exclusiveParentNode.clearDependents();
 
         // make desired node be the only dependent of this parent
-        depNode.setParent(exclusiveParentNode);
+        depNode.setParent(exclusiveParentNode, true);
 
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
             Tr.debug(tc, "set up exclusive parent, clear counts and resort nodes");
@@ -386,7 +387,7 @@ public class Tree {
             Node oldParent = depNode.getParent();
 
             // move the dependent node, reset write counters, and re-sort the affected set of siblings according to original priorities
-            depNode.setParent(newParentNode);
+            depNode.setParent(newParentNode, true);
             depNode.setPriority(newPriority);
 
             newParentNode.clearDependentsWriteCount();
@@ -412,10 +413,10 @@ public class Tree {
             // move the current newParentNode to be the dependent on the new dependent node's previous parent.
             Node grandParent = depNode.getParent();
             Node oldDepParent = newParentNode.getParent();
-            newParentNode.setParent(grandParent); // set Parent will also remove newParentNode as a dependent of its current/old parent
+            newParentNode.setParent(grandParent, true); // set Parent will also remove newParentNode as a dependent of its current/old parent
 
             // now make the new dependent node depend on the newParentNode
-            depNode.setParent(newParentNode);
+            depNode.setParent(newParentNode, true);
             depNode.setPriority(newPriority);
 
             // clear and re-sort the effective levels we touched
@@ -504,18 +505,22 @@ public class Tree {
         iter = dependents.iterator();
         while (iter.hasNext()) {
             Node depNode = iter.next();
-            depNode.setParent(newParent);
-            int priority = (nodeToRemovePriority * depNode.getPriority()) / prioritySum;
-            if (priority == 0) {
-                priority = 1;
+            depNode.setParent(newParent, false);
+            if (prioritySum != 0) {
+                int priority = (nodeToRemovePriority * depNode.getPriority()) / prioritySum;
+                if (priority == 0) {
+                    priority = 1;
+                }
+                depNode.setPriority(priority);
             }
         }
+        nodeToRemove.clearDependents();
 
         // remove node from the tree
         if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
             Tr.debug(tc, "remove the node from the tree");
         }
-        nodeToRemove.setParent(null);
+        nodeToRemove.setParent(null, true);
 
         return true;
     }

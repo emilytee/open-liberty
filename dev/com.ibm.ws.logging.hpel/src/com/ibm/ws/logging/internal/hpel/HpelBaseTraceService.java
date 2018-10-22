@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2014 IBM Corporation and others.
+ * Copyright (c) 2012, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -14,9 +14,9 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 
-import com.ibm.websphere.logging.WsLevel;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.kernel.boot.logging.LoggerHandlerManager;
+import com.ibm.ws.logging.RoutedMessage;
 import com.ibm.ws.logging.internal.impl.BaseTraceService;
 import com.ibm.ws.logging.internal.impl.LogProviderConfigImpl;
 import com.ibm.ws.logging.internal.impl.RoutedMessageImpl;
@@ -32,8 +32,16 @@ public class HpelBaseTraceService extends BaseTraceService {
     /** {@inheritDoc} */
     @Override
     public void echo(SystemLogHolder holder, LogRecord logRecord) {
-        if (copySystemStreams) {
-            writeFilteredStreamOutput(holder, logRecord);
+        RoutedMessage routedMessage = null;
+        if (externalMessageRouter.get() != null) {
+            String message = formatter.messageLogFormat(logRecord, logRecord.getMessage());
+            routedMessage = new RoutedMessageImpl(logRecord.getMessage(), logRecord.getMessage(), message, logRecord);
+        } else {
+            routedMessage = new RoutedMessageImpl(logRecord.getMessage(), logRecord.getMessage(), null, logRecord);
+        }
+        invokeMessageRouters(routedMessage);
+        if (logSource != null) {
+            publishToLogSource(routedMessage);
         }
         trWriter.repositoryPublish(logRecord);
     }
@@ -50,26 +58,12 @@ public class HpelBaseTraceService extends BaseTraceService {
             // This has to be checked in this method: direct invocation of system.out
             // and system.err are not subject to message routing.
             MessageRouter router = externalMessageRouter.get();
-
             if (router != null) {
                 boolean logNormally = router.route(txt, logRecord);
                 if (!logNormally)
                     return false;
             }
-
-            if (levelValue >= consoleLogLevel.intValue()) {
-                // Send some messages to the system streams
-                if (levelValue == WsLevel.ERROR.intValue() || levelValue == WsLevel.FATAL.intValue()) {
-                    // WsLevel.ERROR and Level.SEVERE have the same int value
-                    // SEVERE, ERROR, FATAL messages are routed to System.err
-                    writeStreamOutput(systemErr, formatter.consoleLogFormat(logRecord, txt), false);
-                } else {
-                    // messages othwerwise above the filter are routed to system out
-                    writeStreamOutput(systemOut, formatter.consoleLogFormat(logRecord, txt), false);
-                }
-            }
         }
-
         return true;
     }
 
@@ -83,26 +77,33 @@ public class HpelBaseTraceService extends BaseTraceService {
         int levelValue = level.intValue();
 
         if (levelValue >= Level.INFO.intValue()) {
-            if (externalMessageRouter.get() != null || internalMessageRouter.get() != null) { // ***THIS IS THE PERFORMANCE OPTIMIZATION***
-                formattedMsg = formatter.formatMessage(logRecord);
-                formattedVerboseMsg = formatter.formatVerboseMessage(logRecord, formattedMsg);
-                String messageLogFormat = formatter.messageLogFormat(logRecord, formattedVerboseMsg);
+            formattedMsg = formatter.formatMessage(logRecord);
+            formattedVerboseMsg = formatter.formatVerboseMessage(logRecord, formattedMsg);
 
-                // Look for external log handlers. They may suppress "normal" log
-                // processing, which would prevent it from showing up in other logs.
-                // This has to be checked in this method: direct invocation of system.out
-                // and system.err are not subject to message routing.
-                boolean logNormally = invokeMessageRouters(new RoutedMessageImpl(formattedMsg, formattedVerboseMsg, messageLogFormat, logRecord));
-                if (!logNormally)
-                    return;
+            RoutedMessage routedMessage = null;
+            if (externalMessageRouter.get() != null || internalMessageRouter.get() != null) {
+                String message = formatter.messageLogFormat(logRecord, formattedVerboseMsg);
+                routedMessage = new RoutedMessageImpl(formattedMsg, formattedVerboseMsg, message, logRecord);
+            } else {
+                routedMessage = new RoutedMessageImpl(formattedMsg, formattedVerboseMsg, null, logRecord);
             }
+            // Look for external log handlers. They may suppress "normal" log
+            // processing, which would prevent it from showing up in other logs.
+            // This has to be checked in this method: direct invocation of system.out
+            // and system.err are not subject to message routing.
+            boolean logNormally = invokeMessageRouters(routedMessage);
+            if (!logNormally)
+                return;
+
             trWriter.repositoryPublish(logRecord);
-        }
-        //Route other types of logs (<INFO) to trace (RTC237423)
-        else {
-            if (TraceComponent.isAnyTracingEnabled()) {
-                TraceWriter detailLog = traceLog;
-                publishTraceLogRecord(detailLog, logRecord, NULL_ID, formattedMsg, formattedVerboseMsg);
+
+            //If any messages configured to be hidden then those will not be written to console.log and will be redirected to logdata/tracedata
+            if (isMessageHidden(formattedMsg)) {
+                return;
+            }
+
+            if (logSource != null) {
+                publishToLogSource(routedMessage);
             }
         }
     }
@@ -113,10 +114,20 @@ public class HpelBaseTraceService extends BaseTraceService {
         if (formattedVerboseMsg == null) {
             formattedVerboseMsg = formatter.formatVerboseMessage(logRecord, formattedMsg, false);
         }
+        RoutedMessage routedTrace = new RoutedMessageImpl(formattedMsg, formattedVerboseMsg, null, logRecord);
         //RTC237423: This method (specifically SimpleDateFormat) significantly slows down logging when enabled
         //but the results of this call are not actually used anywhere (for traces), so it can be disabled for now
         //String traceDetail = formatter.traceLogFormat(logRecord, id, formattedMsg, formattedVerboseMsg);
-        invokeTraceRouters(new RoutedMessageImpl(formattedMsg, formattedVerboseMsg, null, logRecord));
+        invokeTraceRouters(routedTrace);
+        try {
+            if (!(counterForTraceSource.incrementCount() > 2)) {
+                if (traceSource != null) {
+                    traceSource.publish(routedTrace, id);
+                }
+            }
+        } finally {
+            counterForTraceRouter.decrementCount();
+        }
         trWriter.repositoryPublish(logRecord);
     }
 
@@ -131,7 +142,15 @@ public class HpelBaseTraceService extends BaseTraceService {
         LoggerHandlerManager.setSingleton(new Handler() {
             @Override
             public void publish(LogRecord logRecord) {
-                HpelBaseTraceService.this.publishLogRecord(logRecord);
+                Level level = logRecord.getLevel();
+                int levelValue = level.intValue();
+                if (levelValue >= Level.INFO.intValue()) {
+                    HpelBaseTraceService.this.publishLogRecord(logRecord);
+                } else {
+                    if (TraceComponent.isAnyTracingEnabled()) {
+                        HpelBaseTraceService.this.publishTraceLogRecord(traceLog, logRecord, NULL_ID, null, null);
+                    }
+                }
             }
 
             @Override

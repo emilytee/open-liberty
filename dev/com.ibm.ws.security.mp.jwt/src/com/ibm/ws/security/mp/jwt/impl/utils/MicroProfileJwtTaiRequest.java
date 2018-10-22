@@ -6,13 +6,14 @@
  * http://www.eclipse.org/legal/epl-v10.html
  *
  * Contributors:
- *     IBM Corporation - initial API and implementation
+ * IBM Corporation - initial API and implementation
  *******************************************************************************/
 
 package com.ibm.ws.security.mp.jwt.impl.utils;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 
@@ -23,6 +24,7 @@ import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.security.mp.jwt.MicroProfileJwtConfig;
 import com.ibm.ws.security.mp.jwt.TraceConstants;
 import com.ibm.ws.security.mp.jwt.error.MpJwtProcessingException;
+import com.ibm.ws.security.mp.jwt.tai.TAIRequestHelper;
 
 /*
  * Store the data for a httpServletRequest session
@@ -37,10 +39,12 @@ public class MicroProfileJwtTaiRequest {
 
     protected HttpServletRequest request;
 
-    //protected List<MicroProfileJwtConfig> filteredConfigs = null;
+    protected List<MicroProfileJwtConfig> filteredConfigs = null;
     protected List<MicroProfileJwtConfig> genericConfigs = null;
     MicroProfileJwtConfig microProfileJwtConfig = null;
     MpJwtProcessingException taiException = null;
+
+    TAIRequestHelper taiRequestHelper = new TAIRequestHelper();
 
     /**
      * Called by TAI for now
@@ -54,16 +58,16 @@ public class MicroProfileJwtTaiRequest {
     /**
      * @param service
      */
-    //    public void addFilteredConfig(MicroProfileJwtConfig mpJwtConfig) {
-    //        if (mpJwtConfig != null) {
-    //            if (this.filteredConfigs == null) {
-    //                this.filteredConfigs = new ArrayList<MicroProfileJwtConfig>();
-    //            }
-    //            if (!this.filteredConfigs.contains(mpJwtConfig)) {
-    //                this.filteredConfigs.add(mpJwtConfig);
-    //            }
-    //        }
-    //    }
+    public void addFilteredConfig(MicroProfileJwtConfig mpJwtConfig) {
+        if (mpJwtConfig != null) {
+            if (this.filteredConfigs == null) {
+                this.filteredConfigs = new ArrayList<MicroProfileJwtConfig>();
+            }
+            if (!this.filteredConfigs.contains(mpJwtConfig)) {
+                this.filteredConfigs.add(mpJwtConfig);
+            }
+        }
+    }
 
     /**
      * This is supposed to be called once in a request only.
@@ -115,9 +119,9 @@ public class MicroProfileJwtTaiRequest {
         return this.request;
     }
 
-    //    public List<MicroProfileJwtConfig> getFilteredConfigs() {
-    //        return this.filteredConfigs;
-    //    }
+    public List<MicroProfileJwtConfig> getFilteredConfigs() {
+        return this.filteredConfigs;
+    }
 
     public List<MicroProfileJwtConfig> getGenericConfigs() {
         return this.genericConfigs;
@@ -132,9 +136,9 @@ public class MicroProfileJwtTaiRequest {
         if (microProfileJwtConfig != null) {
             allConfigs.add(microProfileJwtConfig);
         }
-        //        if (filteredConfigs != null) {
-        //            allConfigs.addAll(filteredConfigs);
-        //        }
+        if (filteredConfigs != null) {
+            allConfigs.addAll(filteredConfigs);
+        }
         if (genericConfigs != null) {
             allConfigs.addAll(genericConfigs);
         }
@@ -191,18 +195,25 @@ public class MicroProfileJwtTaiRequest {
         if (tc.isDebugEnabled()) {
             Tr.entry(tc, methodName);
         }
-        //            if (this.filteredConfigs != null) {
-        //                if (this.filteredConfigs.size() == 1) {
-        //                    this.microProfileJwtConfig = this.filteredConfigs.get(0);
-        //                } else {
-        //                    // error handling -- multiple mpJwtConfig qualified and we do not know how to select
-        //                    String configIds = getConfigIds(filteredConfigs);
-        //                    throw new MpJwtProcessingException("SOCIAL_LOGIN_MANY_PROVIDERS", null, new Object[] { configIds });
-        //                }
-        //            } else
-        if (this.genericConfigs != null) {
-            if (this.genericConfigs.size() == 1) {
-                this.microProfileJwtConfig = this.genericConfigs.get(0);
+        if (this.filteredConfigs != null) {
+            if (this.filteredConfigs.size() == 1) {
+                this.microProfileJwtConfig = this.filteredConfigs.get(0);
+            } else {
+                // error handling -- multiple mpJwtConfig qualified and we do not know how to select
+                String configIds = getConfigIds(filteredConfigs);
+                String msg = Tr.formatMessage(tc, "TOO_MANY_MP_JWT_PROVIDERS", new Object[] { configIds });
+                Tr.error(tc, msg);
+                throw new MpJwtProcessingException(msg);
+            }
+        } else if (this.genericConfigs != null) {
+            if (this.genericConfigs.size() < 2) {
+                this.microProfileJwtConfig = this.genericConfigs.get(0); 
+            } else if (this.genericConfigs.size() <= 3) {
+                if (!handleMultipleConfigurations()) {
+                    // if we have two jwtsso or two mpjwt configurations, then we cannot process
+                    handleTooManyConfigurations();
+                }
+
             } else {
                 handleTooManyConfigurations();
             }
@@ -212,6 +223,53 @@ public class MicroProfileJwtTaiRequest {
         }
         return this.microProfileJwtConfig;
     }
+
+    /**
+     *
+     */
+    private boolean handleTwoConfigurations() {
+
+        Iterator it = this.genericConfigs.iterator();
+        boolean jwtsso = false;
+        boolean mpjwt = false;
+        boolean defaultmpjwt = true;
+   
+        while (it.hasNext()) {
+            MicroProfileJwtConfig mpJwtConfig = (MicroProfileJwtConfig) it.next();
+            if (taiRequestHelper.isJwtSsoFeatureActive(mpJwtConfig)) {
+                jwtsso = true;
+                this.microProfileJwtConfig = mpJwtConfig;
+            } else {
+                mpjwt = true;
+            }
+        }
+        return jwtsso && mpjwt;
+    }
+    
+    private boolean handleMultipleConfigurations() {
+
+        Iterator it = this.genericConfigs.iterator();
+        int jwtsso = 0;
+        int mpjwt = 0;
+        
+        MicroProfileJwtConfig mpjwtConfiguration = null;
+        
+        while (it.hasNext()) {
+            MicroProfileJwtConfig mpJwtConfig = (MicroProfileJwtConfig) it.next();
+            if (taiRequestHelper.isJwtSsoFeatureActive(mpJwtConfig)) {
+                jwtsso ++;
+                this.microProfileJwtConfig = mpJwtConfig;
+            } else if (!taiRequestHelper.isMpJwtDefaultConfig(mpJwtConfig)) {
+                mpjwt ++;
+                mpjwtConfiguration = mpJwtConfig;
+            }
+        }
+        if (jwtsso < 1 && mpjwt == 1) {
+            this.microProfileJwtConfig = mpjwtConfiguration;
+        }
+        return jwtsso <= 1 && mpjwt <= 1;
+    }
+    
 
     void handleTooManyConfigurations() throws MpJwtProcessingException {
         // error handling -- multiple mpJwtConfig qualified and we do not know how to select

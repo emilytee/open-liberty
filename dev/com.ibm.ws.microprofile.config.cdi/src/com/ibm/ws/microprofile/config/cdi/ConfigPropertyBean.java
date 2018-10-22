@@ -21,7 +21,6 @@ import javax.enterprise.context.Dependent;
 import javax.enterprise.context.spi.CreationalContext;
 import javax.enterprise.inject.spi.Bean;
 import javax.enterprise.inject.spi.BeanManager;
-import javax.enterprise.inject.spi.CDI;
 import javax.enterprise.inject.spi.InjectionPoint;
 import javax.enterprise.inject.spi.PassivationCapable;
 
@@ -30,6 +29,7 @@ import org.eclipse.microprofile.config.ConfigProvider;
 
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.websphere.ras.annotation.Trivial;
 
 /**
  * This CDI Bean controls the creation of all raw types whose values are obtained via a Config instance.
@@ -41,6 +41,8 @@ public class ConfigPropertyBean<T> extends AbstractConfigBean<T> implements Bean
 
     private final Class<T> beanClass;
 
+    private final BeanManager beanManager;
+
     public ConfigPropertyBean(BeanManager beanManager, Class<T> beanClass) {
         this(beanManager, beanClass, beanClass);
     }
@@ -48,14 +50,13 @@ public class ConfigPropertyBean<T> extends AbstractConfigBean<T> implements Bean
     public ConfigPropertyBean(BeanManager beanManager, Type beanType, Class<T> beanClass) {
         super(beanManager, beanType, ConfigPropertyLiteral.INSTANCE);
         this.beanClass = beanClass;
+        this.beanManager = beanManager;
     }
 
     /** {@inheritDoc} */
     @SuppressWarnings("unchecked")
     @Override
     public T create(CreationalContext<T> creationalContext) {
-        CDI<Object> cdi = CDI.current();
-        BeanManager beanManager = cdi.getBeanManager();
         InjectionPoint injectionPoint = getInjectionPoint(beanManager, creationalContext);
 
         // Note the config is cached per thread context class loader
@@ -66,29 +67,14 @@ public class ConfigPropertyBean<T> extends AbstractConfigBean<T> implements Bean
         T instance = null;
 
         Type ipType = injectionPoint.getType();
+        boolean optional = false;
         if (ipType instanceof ParameterizedType) {
             ParameterizedType pType = (ParameterizedType) ipType;
             Type rType = pType.getRawType();
-            if (rType == Optional.class) {
-                Type[] tArgs = pType.getActualTypeArguments();
-                Type aType = tArgs[0];
-                Class<?> aClass = (Class<?>) aType;
-                instance = (T) getOptional(config, injectionPoint, aClass);
-            } else {
-                throw new IllegalArgumentException(Tr.formatMessage(tc, "unable.to.determine.injection.type.CWMCG5001E", ipType));
-            }
-        } else if (ipType instanceof Class) {
-            Class<T> ipClass = (Class<T>) ipType;
-            instance = ConfigProducer.newValue(config, injectionPoint, ipClass, false);
-        } else {
-            throw new IllegalArgumentException(Tr.formatMessage(tc, "unable.to.determine.injection.type.CWMCG5001E", ipType));
+            optional = (rType == Optional.class);
         }
+        instance = (T) ConfigProducer.newValue(config, injectionPoint, ipType, optional);
         return instance;
-    }
-
-    private <K> Optional<K> getOptional(Config config, InjectionPoint injectionPoint, Class<K> clazz) {
-        Optional<K> opt = ConfigProducer.newOptional(config, injectionPoint, clazz);
-        return opt;
     }
 
     private InjectionPoint getInjectionPoint(final BeanManager beanManager, final CreationalContext<?> creationalContext) {
@@ -109,18 +95,21 @@ public class ConfigPropertyBean<T> extends AbstractConfigBean<T> implements Bean
 
     /** {@inheritDoc} */
     @Override
+    @Trivial
     public Class<?> getBeanClass() {
         return beanClass;
     }
 
     /** {@inheritDoc} */
     @Override
+    @Trivial
     public boolean isNullable() {
         return true;
     }
 
     /** {@inheritDoc} */
     @Override
+    @Trivial
     public Class<? extends Annotation> getScope() {
         return Dependent.class;
     }

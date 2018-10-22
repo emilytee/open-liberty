@@ -8,8 +8,11 @@
  * Contributors:
  *     IBM Corporation - initial API and implementation
  *******************************************************************************/
-test {
-    if(JavaVersion.current().isJava9Compatible()) {
-    	jvmArgs '--add-modules=java.xml.ws'
-    }
-} 
+
+plugins {
+  id "net.ossindex.audit" version "0.3.8-beta"
+}
+
+audit {
+    failOnError = true
+}

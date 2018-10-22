@@ -14,19 +14,17 @@ import java.security.AccessController;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.MissingResourceException;
-import java.util.ResourceBundle;
-import java.util.Set;
-import java.util.TreeSet;
 
 import com.ibm.ws.kernel.boot.internal.BootstrapConstants;
 import com.ibm.ws.kernel.boot.internal.KernelBootstrap;
 import com.ibm.ws.kernel.boot.internal.ServerLock;
+import com.ibm.ws.kernel.boot.internal.commands.HelpCommand;
 import com.ibm.ws.kernel.boot.internal.commands.ListServerHelper;
+import com.ibm.ws.kernel.boot.internal.commands.ServerHelpActions;
 
 /**
  * The platform launcher; processes command line options and
@@ -247,7 +245,8 @@ public class Launcher {
                 // Use initialized bootstrap configuration to create the server lock.
                 // This ensures the server and nested workarea directory exist and are writable
                 ServerLock.createServerLock(bootProps);
-                rc = bootProps.disablePermGenIfNecessary();
+                boolean generatePass = launchArgs.getOption("no-password") == null;
+                rc = bootProps.generateServerEnv(generatePass);
                 break;
             case MESSAGE_ACTION:
                 rc = showMessage(launchArgs);
@@ -288,7 +287,7 @@ public class Launcher {
                 break;
             case RESUME_ACTION:
                 rc = new com.ibm.ws.kernel.boot.internal.commands.ProcessControlHelper(bootProps, launchArgs).resume();
-                break; 
+                break;
             case LIST_ACTION:
                 rc = new ListServerHelper(bootProps, launchArgs).listServers();
                 break;
@@ -297,16 +296,6 @@ public class Launcher {
                 rc = ReturnCode.BAD_ARGUMENT;
         }
         return rc;
-    }
-
-    /**
-     * Return the ResoueceBundle for process command options.
-     *
-     * @return ResourceBundle
-     */
-    protected ResourceBundle getOptionsResourceBundle() {
-        /** Since this launches the framework, we have to do translation ourselves.. */
-        return ResourceBundle.getBundle("com.ibm.ws.kernel.boot.resources.LauncherOptions");
     }
 
     /**
@@ -337,107 +326,11 @@ public class Launcher {
     }
 
     protected ReturnCode showHelp(LaunchArguments launchArgs) {
-        ResourceBundle options = getOptionsResourceBundle();
-
-        // If we are showing help but someone put in a messed up command,
-        // e.g. "server package --help", we should show/prefer script usage
-        String script = launchArgs.getScript();
-
-        // show java args only if requested: otherwise prefer the script
-        if (script == null) {
-            System.out.println(options.getString("briefUsage"));
-            showUsageInfo(options, true);
-        } else {
-            System.out.println(MessageFormat.format(options.getString("scriptUsage"), script));
-            showUsageInfo(options, false);
-        }
-
-        return ReturnCode.OK;
+        return new HelpCommand(getHelpActions()).showHelp(launchArgs);
     }
 
-    /**
-     * Show usage info based on the translated messages available for each
-     * option. Will display in sorted order. Each option should have two keys in
-     * the LauncherMessages file:
-     * <ul>
-     * <li>option-key.name: this should contain the name of the option and it's parameters. e.g. option-key.clean=-clean</li>
-     * <li>option-desc.name: this should describe what the option is for. e.g. option-desc.clean=Clean the OSGi framework cache.</li>
-     * </ul>
-     */
-    protected void showUsageInfo(ResourceBundle options, boolean forJava) {
-        final String okpfx = "option-key.";
-        final String odpfx = "option-desc.";
-        final String akpfx = "action-key.";
-        final String adpfx = "action-desc.";
-
-        System.out.println();
-        System.out.println(options.getString("processName.key"));
-        System.out.println(options.getString("processName.desc"));
-        System.out.println();
-
-        Enumeration<String> keys = options.getKeys();
-        Set<String> optionKeys = new TreeSet<String>();
-        Set<String> actionKeys = new TreeSet<String>();
-
-        while (keys.hasMoreElements()) {
-            String key = keys.nextElement();
-            if (key.startsWith(okpfx)) {
-                optionKeys.add(key);
-            } else if (key.startsWith(akpfx)) {
-                actionKeys.add(key);
-            }
-        }
-
-        System.out.println(options.getString("use.actions"));
-        System.out.println();
-        // Print each action and it's associated descriptive text
-        for (String actionKey : actionKeys) {
-            String action = actionKey.substring(akpfx.length());
-            String actionKeyString = options.getString(actionKey);
-            String actionDesc = options.getString(adpfx + action);
-
-            //TODO revert this when schemagen is delivered based on design issue #153300 conclusion.
-            if (actionKeyString.trim().equals("--schemagen"))
-                continue;
-
-            if (forJava) {
-                // These actions are implied for java -jar.
-                String actionKeyStringTrimmed = actionKeyString.trim();
-                if (actionKeyStringTrimmed.equals("--start") ||
-                    actionKeyStringTrimmed.equals("--run") ||
-                    actionKeyStringTrimmed.equals("--debug")) {
-                    continue;
-                }
-            } else {
-                actionKeyString = actionKeyString.replace("--", "");
-            }
-
-            System.out.println(actionKeyString);
-            if (!actionDesc.isEmpty())
-                System.out.println(actionDesc);
-            System.out.println();
-        }
-
-        if (optionKeys.size() > 0) {
-            System.out.println(options.getString("use.options"));
-            System.out.println();
-
-            // Print each option and it's associated descriptive text
-            for (String optionKey : optionKeys) {
-                String option = optionKey.substring(okpfx.length());
-                System.out.println(options.getString(optionKey));
-                System.out.println(options.getString(odpfx + option));
-                System.out.println();
-            }
-        }
-
-        if (forJava) {
-            System.out.println(options.getString("use.jvmarg"));
-            System.out.println();
-            System.out.println(options.getString("javaAgent.key"));
-            System.out.println(options.getString("javaAgent.desc"));
-            System.out.println();
-        }
+    protected HelpActions getHelpActions() {
+        return new ServerHelpActions();
     }
 
     /**

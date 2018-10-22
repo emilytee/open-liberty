@@ -22,6 +22,8 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
 import java.net.URL;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -42,7 +44,7 @@ import javax.sql.XADataSource;
 import javax.transaction.xa.XAResource;
 
 import com.ibm.ejs.ras.TraceComponent;
-import com.ibm.ws.kernel.service.util.PrivHelper;
+import com.ibm.ws.jdbc.internal.PropertyService;
 
 /**
  * This class provides generic JDBC method level tracing for JDBC drivers (like the
@@ -146,7 +148,7 @@ public class WSJdbcTracer implements InvocationHandler
         // Trace entry
 
         if (TraceComponent.isAnyTracingEnabled() && tracer.isDebugEnabled()) {
-            boolean hasPassword = methName.equals("getPooledConnection") || methName.equals("getXAConnection");
+            boolean hasPassword = methName.equals("getPooledConnection") || methName.equals("getXAConnection") || methName.equals("connect");
 
             StringBuilder buffer = new StringBuilder(120);
 
@@ -154,6 +156,11 @@ public class WSJdbcTracer implements InvocationHandler
 
             if (tracer.getLevel() <= 1 /* LevelConstants.LEVEL_ALL */&& args != null)
                 for (int i = 0; i < args.length; i++) {
+                    if(methName.equals("connect") && i == 0) {
+                        buffer.append(PropertyService.filterURL(toString(args[i])));
+                        continue;
+                    }
+                    
                     if (i != 0)
                         buffer.append(", ");
                     buffer.append(hasPassword && i == 1 ? "***" : toString(args[i]));
@@ -195,7 +202,12 @@ public class WSJdbcTracer implements InvocationHandler
             // - include SQL for PreparedStatement & CallableStatement
             final String query = methName.startsWith("prepare") && PreparedStatement.class.isAssignableFrom(returnType)
                            && args.length >= 1 && args[0] instanceof String ? (String) args[0] : null;
-            traceableResult = Proxy.newProxyInstance(PrivHelper.getClassLoader(returnType), new Class[] { returnType }, new WSJdbcTracer(tracer, writer, result, returnType, query, false));
+            final WSJdbcTracer newTracer = new WSJdbcTracer(tracer, writer, result, returnType, query, false);
+            traceableResult = AccessController.doPrivileged(new PrivilegedAction<Object>() {
+                public Object run() {
+                    return Proxy.newProxyInstance(returnType.getClassLoader(), new Class[] { returnType }, newTracer);
+                }
+            });
         }
 
         // Trace exit after successful invocation.

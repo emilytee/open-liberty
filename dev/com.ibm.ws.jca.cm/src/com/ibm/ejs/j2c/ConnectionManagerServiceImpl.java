@@ -10,6 +10,7 @@
  *******************************************************************************/
 package com.ibm.ejs.j2c;
 
+import java.security.AccessController;
 import java.sql.Connection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -33,15 +34,13 @@ import org.osgi.service.component.ComponentContext;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.ffdc.FFDCFilter;
-import com.ibm.ws.j2c.SecurityHelper;
 import com.ibm.ws.j2c.poolmanager.ConnectionPoolProperties;
 import com.ibm.ws.javaee.dd.common.ResourceRef;
 import com.ibm.ws.jca.adapter.PurgePolicy;
 import com.ibm.ws.jca.cm.AbstractConnectionFactoryService;
 import com.ibm.ws.jca.cm.ConnectionManagerService;
 import com.ibm.ws.jca.cm.ConnectorService;
-import com.ibm.ws.kernel.security.thread.ThreadIdentityManager;
-import com.ibm.ws.kernel.service.util.PrivHelper;
+import com.ibm.ws.kernel.service.util.SecureAction;
 import com.ibm.ws.resource.ResourceRefInfo;
 import com.ibm.wsspi.kernel.service.utils.MetatypeUtils;
 import com.ibm.wsspi.resource.ResourceInfo;
@@ -52,6 +51,7 @@ import com.ibm.wsspi.resource.ResourceInfo;
 public class ConnectionManagerServiceImpl extends ConnectionManagerService {
 
     private static final TraceComponent tc = Tr.register(ConnectionManagerServiceImpl.class, J2CConstants.traceSpec, J2CConstants.NLS_FILE);
+    final static SecureAction priv = AccessController.doPrivileged(SecureAction.get());
 
     /**
      * Mapping of connection factory key to connection manager.
@@ -130,7 +130,7 @@ public class ConnectionManagerServiceImpl extends ConnectionManagerService {
         if (trace && tc.isEntryEnabled())
             Tr.entry(this, tc, "activate", properties);
 
-        bndCtx = PrivHelper.getBundleContext(context);
+        bndCtx = priv.getBundleContext(context);
 
         // config.displayId contains the Xpath identifier.
         name = (String) properties.get("config.displayId");
@@ -169,45 +169,6 @@ public class ConnectionManagerServiceImpl extends ConnectionManagerService {
     }
 
     /**
-     * Convert a value to be understood by traditional WAS J2C,
-     * according to the specified rules.
-     *
-     * @param value value to convert
-     * @param defaultValue default to use if the value isn't supported
-     * @param tWAS_immediate value used by tWAS for immediate. Null if not supported.
-     * @param tWAS_infinite value used by tWAS for infinite or never time out. Null if not supported.
-     * @param propName name of the property (in case we need to raise an error).
-     * @param connectorSvc connector service
-     * @return configured value as understood by traditional WAS J2C code.
-     * @throws ResourceException if the value isn't supported and the ignore/warn/fail setting is configured to fail.
-     */
-    private static final int convert(int value, int defaultValue, Integer tWAS_immediate, Integer tWAS_infinite, String propName,
-                                     ConnectorService connectorSvc) throws ResourceException {
-        boolean supported = true;
-        if (value == 0)
-            if (tWAS_immediate == null) // immediate not supported
-                supported = false;
-            else
-                return tWAS_immediate;
-        else if (value < 0)
-            if (tWAS_infinite == null) // infinite not supported
-                supported = false;
-            else
-                return tWAS_infinite;
-
-        if (supported)
-            return value;
-        else {
-            ResourceException failure = connectorSvc.ignoreWarnOrFail(tc, null, ResourceException.class, "UNSUPPORTED_VALUE_J2CA8011",
-                                                                      value, propName, CONNECTION_MANAGER);
-            if (failure == null)
-                return defaultValue;
-            else
-                throw failure;
-        }
-    }
-
-    /**
      * Create and initialize the connection manager/pool configuration
      * based on the connection factory configuration.
      * Precondition: invoker must have the write lock for this connection manager service.
@@ -216,7 +177,6 @@ public class ConnectionManagerServiceImpl extends ConnectionManagerService {
      * @throws ResourceException if an error occurs
      */
     private void createPoolManager(AbstractConnectionFactoryService svc) throws ResourceException {
-
         final boolean trace = TraceComponent.isAnyTracingEnabled();
         if (trace && tc.isEntryEnabled())
             Tr.entry(this, tc, "createPoolManager", svc, properties);
@@ -227,7 +187,7 @@ public class ConnectionManagerServiceImpl extends ConnectionManagerService {
                         gConfigProps, raClassLoader);
 
         if (bndCtx == null)
-            bndCtx = PrivHelper.getBundleContext(FrameworkUtil.getBundle(getClass()));
+            bndCtx = priv.getBundleContext(FrameworkUtil.getBundle(getClass()));
 
         try {
             pmMBean = new PoolManagerMBeanImpl(pm, svc.getFeatureVersion());
@@ -402,12 +362,11 @@ public class ConnectionManagerServiceImpl extends ConnectionManagerService {
             cm = cfKeyToCM.get(cfDetailsKey);
             if (cm == null) {
                 CommonXAResourceInfo xaResInfo = new EmbXAResourceInfo(cmConfigData);
-                SecurityHelper securityHelper = createSecurityHelper(svc);
                 J2CGlobalConfigProperties gConfigProps = pm.getGConfigProps();
                 synchronized (this) {
                     cm = cfKeyToCM.get(cfDetailsKey);
                     if (cm == null) {
-                        cm = new ConnectionManager(svc, pm, gConfigProps, xaResInfo, securityHelper);
+                        cm = new ConnectionManager(svc, pm, gConfigProps, xaResInfo);
                         cfKeyToCM.put(cfDetailsKey, cm);
                     }
                 }
@@ -420,28 +379,6 @@ public class ConnectionManagerServiceImpl extends ConnectionManagerService {
         if (trace && tc.isEntryEnabled())
             Tr.exit(this, tc, "getConnectionManager", cm);
         return cm;
-    }
-
-    /**
-     * Creates a new instance of DefaultSecurityHelper or ThreadIdentitySecurityHelper,
-     * based on the config of the connection factory.
-     *
-     * @param cfSvc the connection factory service.
-     * @return If thread identity is enabled, a ThreadIdentitySecurityHelper; otherwise a DefaultSecurityHelper.
-     * @throws ResourceException if an error occurs.
-     */
-    private SecurityHelper createSecurityHelper(AbstractConnectionFactoryService cfSvc) throws ResourceException {
-
-        if (ThreadIdentityManager.isThreadIdentityEnabled()) {
-            String threadIdentitySupport = cfSvc.getThreadIdentitySupport();
-            if (threadIdentitySupport.equals(J2CGlobalConfigProperties.THREADIDENTITY_ALLOWED)
-                || threadIdentitySupport.equals(J2CGlobalConfigProperties.THREADIDENTITY_REQUIRED)) {
-                return new ThreadIdentitySecurityHelper(threadIdentitySupport, cfSvc.getThreadSecurity());
-            }
-        }
-
-        // If we got here, thread identity must not be enabled.  Return default.
-        return new DefaultSecurityHelper();
     }
 
     /**
@@ -511,22 +448,21 @@ public class ConnectionManagerServiceImpl extends ConnectionManagerService {
         @SuppressWarnings("unchecked")
         Map<String, Object> map = properties == null ? Collections.EMPTY_MAP : new HashMap<String, Object>(properties);
 
-        // Set configured values or initial default values.
-        int agedTimeout = validateProperty(map, J2CConstants.POOL_AgedTimeout, -1, TimeUnit.SECONDS, -1, Integer.MAX_VALUE, -1, 0, connectorSvc);
-        int connectionTimeout = validateProperty(map, J2CConstants.POOL_ConnectionTimeout, 30, TimeUnit.SECONDS, -1, Integer.MAX_VALUE, -1, 0, connectorSvc);
-        int maxIdleTime = validateProperty(map, MAX_IDLE_TIME, ConnectionPoolProperties.DEFAULT_UNUSED_TIMEOUT, TimeUnit.SECONDS, -1, Integer.MAX_VALUE, null, 0, connectorSvc);
-        int maxNumberOfMCsAllowableInThread = validateProperty(map, MAX_CONNECTIONS_PER_THREAD, 0, null, 0, Integer.MAX_VALUE, connectorSvc);
-        int maxPoolSize = validateProperty(map, MAX_POOL_SIZE, 50, null, 0, Integer.MAX_VALUE, connectorSvc);
+        int agedTimeout = validateProperty(map, J2CConstants.POOL_AgedTimeout, -1, TimeUnit.SECONDS, -1, Integer.MAX_VALUE, true, connectorSvc);
+        int connectionTimeout = validateProperty(map, J2CConstants.POOL_ConnectionTimeout, 30, TimeUnit.SECONDS, -1, Integer.MAX_VALUE, true, connectorSvc);
+        int maxIdleTime = validateProperty(map, MAX_IDLE_TIME, ConnectionPoolProperties.DEFAULT_UNUSED_TIMEOUT, TimeUnit.SECONDS, -1, Integer.MAX_VALUE, false, connectorSvc);
+        int maxNumberOfMCsAllowableInThread = validateProperty(map, MAX_CONNECTIONS_PER_THREAD, 0, null, 0, Integer.MAX_VALUE, true, connectorSvc);
+        int maxPoolSize = validateProperty(map, MAX_POOL_SIZE, 50, null, 0, Integer.MAX_VALUE, true, connectorSvc);
         int minPoolSize = 0;
         if (maxPoolSize == 0)
-            minPoolSize = validateProperty(map, MIN_POOL_SIZE, 0, null, 0, Integer.MAX_VALUE, connectorSvc);
+            minPoolSize = validateProperty(map, MIN_POOL_SIZE, 0, null, 0, Integer.MAX_VALUE, true, connectorSvc);
         else
-            minPoolSize = validateProperty(map, MIN_POOL_SIZE, 0, null, 0, maxPoolSize, connectorSvc);
+            minPoolSize = validateProperty(map, MIN_POOL_SIZE, 0, null, 0, maxPoolSize, true, connectorSvc);
 
         int numConnectionsPerThreadLocal = validateProperty(map, NUM_CONNECTIONS_PER_THREAD_LOCAL, ConnectionPoolProperties.DEFAULT_numConnectionsPerThreadLocal,
-                                                            null, 0, Integer.MAX_VALUE, connectorSvc);
-        int reapTime = validateProperty(map, J2CConstants.POOL_ReapTime, ConnectionPoolProperties.DEFAULT_REAP_TIME, TimeUnit.SECONDS, -1, Integer.MAX_VALUE, null,
-                                        0, connectorSvc);
+                                                            null, 0, Integer.MAX_VALUE, true, connectorSvc);
+        int reapTime = validateProperty(map, J2CConstants.POOL_ReapTime, ConnectionPoolProperties.DEFAULT_REAP_TIME, TimeUnit.SECONDS, -1, Integer.MAX_VALUE, false, connectorSvc);
+
         boolean throwExceptionOnMCThreadCheck = false;
 
         /*
@@ -618,14 +554,16 @@ public class ConnectionManagerServiceImpl extends ConnectionManagerService {
      * @param units units for duration type. Null if not a duration type.
      * @param minVal the minimum value
      * @param maxVal the maximum value
+     * @param immediateSupported weather or not property supports immediate action
      * @param connectorSvc connector service
      * @return the configured value if the value is valid, else the default value
      * @throws ResourceException
      */
-    private int validateProperty(Map<String, Object> map, String propName, int defaultVal, TimeUnit units, Integer minVal, Integer maxVal,
+    private int validateProperty(Map<String, Object> map, String propName, int defaultVal, TimeUnit units, Integer minVal, Integer maxVal, Boolean immediateSupported,
                                  ConnectorService connectorSvc) throws ResourceException {
         Object value = map.remove(propName);
 
+        //Get property value and check if it is a number and convert it to long
         long val;
         if (value == null)
             return defaultVal;
@@ -642,6 +580,15 @@ public class ConnectionManagerServiceImpl extends ConnectionManagerService {
                     throw resX;
             }
 
+        //Check if immediate is supported.  If not throw exception
+        if (!immediateSupported && val == 0) {
+            ResourceException immediateFailure = connectorSvc.ignoreWarnOrFail(tc, null, ResourceException.class, "UNSUPPORTED_VALUE_J2CA8011",
+                                                                               val, propName, CONNECTION_MANAGER);
+            if (immediateFailure != null)
+                throw immediateFailure;
+        }
+
+        //Finally check if value is within tolerance
         if (val < minVal || val > maxVal) {
             ResourceException failure = connectorSvc.ignoreWarnOrFail(tc, null, ResourceException.class, "UNSUPPORTED_VALUE_J2CA8011",
                                                                       val, propName, CONNECTION_MANAGER);
@@ -650,32 +597,6 @@ public class ConnectionManagerServiceImpl extends ConnectionManagerService {
             return defaultVal;
         }
         return (int) val;
-    }
-
-    /**
-     * Method tests whether a property's value is valid or not.<p>
-     * Specify the range the value must fall in
-     * with <code>minVal</code> and <code>maxVal</code>. <p>
-     *
-     * This method will also handle raising an exception or Tr message if the
-     * property is invalid.
-     *
-     * @param map map of configured properties
-     * @param propName the name of the property being tested
-     * @param defaultVal the default value
-     * @param units units for duration type. Null if not a duration type.
-     * @param minVal the minimum value
-     * @param maxVal the maximum value
-     * @param tWAS_immediate value used by tWAS for immediate. Null if not supported.
-     * @param tWAS_infinite value used by tWAS for infinite or never time out. Null if not supported.
-     * @param connectorSvc connector service
-     * @return the configured value if the value is valid, else the default value
-     * @throws ResourceException
-     */
-    private final int validateProperty(Map<String, Object> map, String propName, int defaultVal, TimeUnit units, Integer minVal, Integer maxVal, Integer tWAS_immediate,
-                                       Integer tWAS_infinite, ConnectorService connectorSvc) throws ResourceException {
-        int val = validateProperty(map, propName, defaultVal, units, minVal, maxVal, connectorSvc);
-        return convert(val, defaultVal, tWAS_immediate, tWAS_infinite, propName, connectorSvc);
     }
 
     /**

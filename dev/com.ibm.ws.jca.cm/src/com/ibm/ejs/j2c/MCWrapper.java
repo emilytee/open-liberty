@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2017 IBM Corporation and others.
+ * Copyright (c) 1997, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -10,6 +10,8 @@
  *******************************************************************************/
 package com.ibm.ejs.j2c;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.sql.SQLFeatureNotSupportedException;
 import java.util.Date;
 import java.util.HashMap;
@@ -35,6 +37,7 @@ import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.ws.LocalTransaction.LocalTransactionCoordinator;
 import com.ibm.ws.Transaction.UOWCoordinator;
 import com.ibm.ws.Transaction.UOWCurrent;
+import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.j2c.TranWrapper;
 import com.ibm.ws.jca.adapter.WSManagedConnection;
 import com.ibm.ws.jca.adapter.WSManagedConnectionFactory;
@@ -391,6 +394,7 @@ public final class MCWrapper implements com.ibm.ws.j2c.MCWrapper, JCAPMIHelper {
     protected long totalHoldTime = 0;
     private boolean pretestThisConnection = false;
     private boolean aborted = false;
+    private boolean qmidenabled = true;
 
     /**
      * Constructor is protected and should only be used by
@@ -718,6 +722,7 @@ public final class MCWrapper implements com.ibm.ws.j2c.MCWrapper, JCAPMIHelper {
      *
      * The recovery token is set at this time.
      */
+    @FFDCIgnore(NoSuchMethodException.class)
     protected void setConnectionManager(ConnectionManager cm) {
 
         if (cm == null) {
@@ -726,7 +731,31 @@ public final class MCWrapper implements com.ibm.ws.j2c.MCWrapper, JCAPMIHelper {
             throw e;
         }
 
-        recoveryToken = cm.getRecoveryToken();
+        qmidenabled = !(mc instanceof WSManagedConnection);
+        if (qmidenabled) {
+            Class<? extends Object> mcImplClass = ((Object) mc).getClass();
+            Integer recoveryToken = null;
+            try {
+                Method m = mcImplClass.getMethod("getQmid", (Class<?>[]) null);
+                String qmid = (String) m.invoke((Object) mc, (Object[]) null);
+                recoveryToken = cm.getQMIDRecoveryToken(qmid, pm);
+            } catch (NoSuchMethodException nsme) {
+                qmidenabled = false;
+            } catch (InvocationTargetException ite) {
+                qmidenabled = false;
+            } catch (IllegalAccessException e) {
+                qmidenabled = false;
+            } catch (IllegalArgumentException e) {
+                qmidenabled = false;
+            }
+            if (recoveryToken == null) {
+                this.recoveryToken = cm.getRecoveryToken();
+            } else {
+                this.recoveryToken = recoveryToken.intValue();
+            }
+        } else {
+            recoveryToken = cm.getRecoveryToken();
+        }
 
         this.cm = cm;
 
@@ -2193,7 +2222,15 @@ public final class MCWrapper implements com.ibm.ws.j2c.MCWrapper, JCAPMIHelper {
 
                 this.clearHandleList();
                 try {
-                    this.releaseToPoolManager();
+                    if (state != STATE_INACTIVE) { // If this MCWrapper is inactive then it has already been destroyed, likely because
+                        //a connection error occurred event was called on this connection while it was in the free pool.  Skipping a second
+                        //cleanup and destroy so the connection count is not double decremented and we don't get an IllegalStateException.
+                        this.releaseToPoolManager();
+                    } else {
+                        if (isTracingEnabled && tc.isDebugEnabled()) {
+                            Tr.debug(tc, "Skipping release since the MCWrapper state was already STATE_INACTIVE");
+                        }
+                    }
                 } catch (Exception ex) {
                     // Nothing to do here. PoolManager has already logged it.
                     // Since we are in cleanup mode, we will not surface a Runtime exception to the ResourceAdapter
@@ -2313,27 +2350,18 @@ public final class MCWrapper implements com.ibm.ws.j2c.MCWrapper, JCAPMIHelper {
      */
     @Override
     public boolean hasAgedTimedOut(long timeoutValue) {
-
-        final boolean isTracingEnabled = TraceComponent.isAnyTracingEnabled();
-
-        boolean booleanValue = false;
         long currentTime = java.lang.System.currentTimeMillis();
         long timeDifference = currentTime - createdTimeStamp;
-        if (timeDifference > timeoutValue) {
-            booleanValue = true;
-        }
-        if (booleanValue) {
-
-            if (isTracingEnabled && tc.isDebugEnabled()) {
-                Tr.debug(this, tc, "hasAgedTimedOut is " + booleanValue);
+        if (timeDifference >= timeoutValue) {
+            if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
+                Tr.debug(this, tc, "hasAgedTimedOut is true");
                 Tr.debug(this, tc, "The created time was " + new Date(createdTimeStamp) + " and the current time is " + new Date(currentTime));
-                Tr.debug(this, tc, "Time difference " + timeDifference + " is greate then the aged timeout " + timeoutValue);
+                Tr.debug(this, tc, "Time difference " + timeDifference + " is greater than or equal to the aged timeout " + timeoutValue);
             }
-
+            return true;
+        } else {
+            return false;
         }
-
-        return booleanValue;
-
     }
 
     /*

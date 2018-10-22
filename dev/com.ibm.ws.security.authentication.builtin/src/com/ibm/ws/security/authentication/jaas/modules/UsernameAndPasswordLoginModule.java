@@ -24,9 +24,12 @@ import javax.security.auth.spi.LoginModule;
 import com.ibm.ejs.ras.TraceNLS;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
+import com.ibm.websphere.security.auth.WSLoginFailedException;
 import com.ibm.ws.ffdc.annotation.FFDCIgnore;
 import com.ibm.ws.security.AccessIdUtil;
 import com.ibm.ws.security.authentication.AuthenticationException;
+import com.ibm.ws.security.authentication.UserRevokedException;
+import com.ibm.ws.security.authentication.PasswordExpiredException;
 import com.ibm.ws.security.authentication.internal.jaas.modules.ServerCommonLoginModule;
 import com.ibm.ws.security.authentication.principals.WSPrincipal;
 import com.ibm.ws.security.registry.UserRegistry;
@@ -43,7 +46,7 @@ public class UsernameAndPasswordLoginModule extends ServerCommonLoginModule impl
 
     /** {@inheritDoc} */
     @Override
-    @FFDCIgnore({ AuthenticationException.class, IllegalArgumentException.class })
+    @FFDCIgnore({ AuthenticationException.class, IllegalArgumentException.class, WSLoginFailedException.class })
     public boolean login() throws LoginException {
         if (isAlreadyProcessed()) {
             if (TraceComponent.isAnyTracingEnabled() && tc.isDebugEnabled()) {
@@ -83,11 +86,23 @@ public class UsernameAndPasswordLoginModule extends ServerCommonLoginModule impl
                                                                                new Object[] { user },
                                                                                "CWWKS1100A: Authentication failed for the userid {0}. A bad userid and/or password was specified."));
             }
-        } catch (AuthenticationException e) {
+        } 
+        catch (com.ibm.ws.security.registry.PasswordExpiredException e) {
+            throw new PasswordExpiredException(e.getLocalizedMessage(), e);
+        } catch (com.ibm.ws.security.registry.UserRevokedException e) {
+            throw new UserRevokedException(e.getLocalizedMessage(), e);
+        } 
+        catch (AuthenticationException e) {
+
             // NO FFDC: AuthenticationExceptions are expected (bad userid/password is pretty normal)
             throw e; // no-need to wrap
         } catch (IllegalArgumentException e) {
             // NO FFDC: This is normal when user and/or password are blank/null
+            throw new AuthenticationException(e.getLocalizedMessage(), e);
+        } catch (WSLoginFailedException e) {
+            // NO FFDC: This is normal when user and/or password are blank/null
+            throw new AuthenticationException(e.getLocalizedMessage(), e);
+        } catch (LoginException e) {
             throw new AuthenticationException(e.getLocalizedMessage(), e);
         } catch (Exception e) {
             // This is not normal: FFDC will be instrumented
@@ -97,7 +112,7 @@ public class UsernameAndPasswordLoginModule extends ServerCommonLoginModule impl
 
     /**
      * Gets the required Callback objects needed by this login module.
-     * 
+     *
      * @param callbackHandler
      * @return
      * @throws IOException
@@ -126,7 +141,9 @@ public class UsernameAndPasswordLoginModule extends ServerCommonLoginModule impl
         String accessId = AccessIdUtil.createAccessId(AccessIdUtil.TYPE_USER,
                                                       userRegistry.getRealm(),
                                                       userRegistry.getUniqueUserId(urAuthenticatedId));
-        setPrincipalAndCredentials(temporarySubject, username, urAuthenticatedId, accessId, WSPrincipal.AUTH_METHOD_PASSWORD);
+        setWSPrincipal(temporarySubject, username, accessId, WSPrincipal.AUTH_METHOD_PASSWORD);
+        setCredentials(temporarySubject, username, urAuthenticatedId);
+        setOtherPrincipals(temporarySubject, username, accessId, WSPrincipal.AUTH_METHOD_PASSWORD, null);
     }
 
     /** {@inheritDoc} */

@@ -13,9 +13,12 @@ package test.server.config;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 
+import org.jboss.shrinkwrap.api.spec.WebArchive;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
+
+import com.ibm.websphere.simplicity.ShrinkHelper;
 
 import componenttest.annotation.ExpectedFFDC;
 import componenttest.topology.impl.LibertyServer;
@@ -64,7 +67,9 @@ public class DropinsTest extends ServletRunner {
         try {
             server.setMarkToEndOfLog();
             server.addDropinOverrideConfiguration("dropins/simple.xml");
+            server.waitForConfigUpdateInLogUsingMark(null);
             server.addDropinDefaultConfiguration("dropins/aBrokenFile.xml");
+            server.waitForConfigUpdateInLogUsingMark(null);
             server.addDropinOverrideConfiguration("dropins/aBrokenFile.xml");
             server.waitForConfigUpdateInLogUsingMark(null);
             assertEquals("There should be two CWWKG0014E errors", 2, server.waitForMultipleStringsInLog(2, "CWWKG0014E"));
@@ -73,7 +78,9 @@ public class DropinsTest extends ServletRunner {
         } finally {
             server.setMarkToEndOfLog();
             server.deleteDropinOverrideConfiguration("simple.xml");
+            server.waitForConfigUpdateInLogUsingMark(null);
             server.deleteDropinDefaultConfiguration("aBrokenFile.xml");
+            server.waitForConfigUpdateInLogUsingMark(null);
             server.deleteDropinOverrideConfiguration("aBrokenFile.xml");
             server.waitForConfigUpdateInLogUsingMark(null);
         }
@@ -232,6 +239,9 @@ public class DropinsTest extends ServletRunner {
         // Delete dropin configurations just in case
         server.deleteAllDropinConfigurations();
 
+        WebArchive dropinsApp = ShrinkHelper.buildDefaultApp("configdropins", "test.config.dropins");
+        ShrinkHelper.exportAppToServer(server, dropinsApp);
+
         server.startServer("configDropins.log");
 
         //make sure the URL is available
@@ -242,7 +252,7 @@ public class DropinsTest extends ServletRunner {
 
     @AfterClass
     public static void shutdown() throws Exception {
-        server.stopServer();
+        server.stopServer("CWWKG0014E");
         server.deleteFileFromLibertyInstallRoot("lib/features/configfatlibertyinternals-1.0.mf");
 
     }

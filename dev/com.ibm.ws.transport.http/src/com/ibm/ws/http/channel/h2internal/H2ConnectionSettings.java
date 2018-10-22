@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 1997, 2017 IBM Corporation and others.
+ * Copyright (c) 1997, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -10,33 +10,30 @@
  *******************************************************************************/
 package com.ibm.ws.http.channel.h2internal;
 
-import javax.xml.bind.DatatypeConverter;
-
-import com.ibm.ws.http.channel.h2internal.exceptions.ProtocolException;
+import com.ibm.websphere.ras.annotation.Trivial;
+import com.ibm.ws.http.channel.h2internal.exceptions.Http2Exception;
 import com.ibm.ws.http.channel.h2internal.frames.Frame.FrameDirection;
 import com.ibm.ws.http.channel.h2internal.frames.FrameSettings;
+import com.ibm.ws.kernel.service.util.JavaInfo;
 
-/**
- *
- */
 public class H2ConnectionSettings {
 
     // set spec default connection settings
-    public int headerTableSize = 4096;
-    public int enablePush = 1;
-    public int maxConcurrentStreams = 100;
-    public int initialWindowSize = 65535;
-    public int maxFrameSize = 16384;
-    public int maxHeaderListSize = -1;
+    private int headerTableSize = 4096; // SETTINGS_HEADER_TABLE_SIZE
+    private int enablePush = 1; // SETTINGS_ENABLE_PUSH; true (1) by default
+    private int maxConcurrentStreams = 100; // SETTINGS_MAX_CONCURRENT_STREAMS: max open push streams, 100 by default
+    private int initialWindowSize = 65535; // SETTINGS_INITIAL_WINDOW_SIZE
+    public int maxFrameSize = 16384; // SETTINGS_MAX_FRAME_SIZE
+    private int maxHeaderListSize = -1; // SETTINGS_MAX_HEADER_LIST_SIZE : unlimited (-1) by default
 
     /**
      * A settings frame can be encoded as a base-64 string and passed as a header on the initial upgrade request.
      * This method decodes that base-64 string and applies the encoded settings to this http2 connection.
      */
-    protected void processUpgradeHeaderSettings(String settings) throws ProtocolException {
+    protected void processUpgradeHeaderSettings(String settings) throws Http2Exception {
 
         if (settings != null) {
-            byte[] decoded = DatatypeConverter.parseBase64Binary(settings);
+            byte[] decoded = decode(settings);
             if (decoded != null) {
                 FrameSettings settingsFrame = new FrameSettings(0, decoded.length, (byte) 0x0, false, FrameDirection.READ);
                 settingsFrame.processPayload(decoded);
@@ -70,9 +67,97 @@ public class H2ConnectionSettings {
     }
 
     /**
+     * @return the headerTableSize
+     */
+    public int getHeaderTableSize() {
+        return headerTableSize;
+    }
+
+    /**
+     * @param headerTableSize the headerTableSize to set
+     */
+    public void setHeaderTableSize(int headerTableSize) {
+        this.headerTableSize = headerTableSize;
+    }
+
+    /**
+     * @return the initialWindowSize
+     */
+    public int getInitialWindowSize() {
+        return initialWindowSize;
+    }
+
+    /**
+     * @param initialWindowSize the initialWindowSize to set
+     */
+    public void setInitialWindowSize(int initialWindowSize) {
+        this.initialWindowSize = initialWindowSize;
+    }
+
+    /**
+     * @return the maxHeaderListSize
+     */
+    public int getMaxHeaderListSize() {
+        return maxHeaderListSize;
+    }
+
+    /**
+     * @param maxHeaderListSize the maxHeaderListSize to set
+     */
+    public void setMaxHeaderListSize(int maxHeaderListSize) {
+        this.maxHeaderListSize = maxHeaderListSize;
+    }
+
+    /**
+     * @return the maxFrameSize
+     */
+    public int getMaxFrameSize() {
+        return maxFrameSize;
+    }
+
+    /**
+     * @param enablePush the enablePush to set
+     */
+    public void setEnablePush(int enablePush) {
+        this.enablePush = enablePush;
+    }
+
+    public void setMaxFrameSize(int maxFrameSize) {
+        this.maxFrameSize = maxFrameSize;
+    }
+
+    public void setMaxConcurrentStreams(int maxConcurrentStreams) {
+        this.maxConcurrentStreams = maxConcurrentStreams;
+    }
+
+    /**
      * Return the client's enable push setting
      */
     public int getEnablePush() {
         return this.enablePush;
+    }
+
+    public int getMaxConcurrentStreams() {
+        return this.maxConcurrentStreams;
+    }
+
+    @Trivial
+    private static byte[] decode(String str) {
+        try {
+            // Parse the base 64 string differently depending on JDK level because
+            // on JDK 7/8 we have JAX-B, and on JDK 8+ we have java.util.Base64
+            if (JavaInfo.majorVersion() < 8) {
+                // return DatatypeConverter.parseBase64Binary(str);
+                Class<?> DatatypeConverter = Class.forName("javax.xml.bind.DatatypeConverter");
+                return (byte[]) DatatypeConverter.getMethod("parseBase64Binary", String.class).invoke(null, str);
+            } else {
+                // return Base64.getDecoder().decode(settings);
+                Class<?> Base64 = Class.forName("java.util.Base64");
+                Object decodeObject = Base64.getMethod("getDecoder").invoke(null);
+                return (byte[]) decodeObject.getClass().getMethod("decode", String.class).invoke(decodeObject, str);
+            }
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

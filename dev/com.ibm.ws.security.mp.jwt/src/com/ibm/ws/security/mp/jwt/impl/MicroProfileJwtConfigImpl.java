@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2017 IBM Corporation and others.
+ * Copyright (c) 2017 - 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -37,6 +37,7 @@ import com.ibm.ws.security.common.config.CommonConfigUtils;
 import com.ibm.ws.security.common.jwk.impl.JWKSet;
 import com.ibm.ws.security.jwt.config.ConsumerUtils;
 import com.ibm.ws.security.jwt.config.JwtConsumerConfig;
+import com.ibm.ws.security.jwt.utils.JwtUtils;
 import com.ibm.ws.security.mp.jwt.MicroProfileJwtConfig;
 import com.ibm.ws.security.mp.jwt.MicroProfileJwtService;
 import com.ibm.ws.security.mp.jwt.SslRefInfo;
@@ -49,7 +50,7 @@ import com.ibm.wsspi.ssl.SSLSupport;
  *
  */
 @Component(name = "com.ibm.ws.security.mp.jwt", configurationPid = "com.ibm.ws.security.mp.jwt", configurationPolicy = ConfigurationPolicy.REQUIRE, immediate = true, service = { MicroProfileJwtConfig.class, JwtConsumerConfig.class }, property = { "service.vendor=IBM", "type=microProfileJwtConfig" })
-public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig, JwtConsumerConfig {
+public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig {
 
     private static TraceComponent tc = Tr.register(MicroProfileJwtConfigImpl.class, TraceConstants.TRACE_GROUP, TraceConstants.MESSAGE_BUNDLE);
     protected final boolean IS_REQUIRED = true;
@@ -79,9 +80,6 @@ public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig, JwtCons
     public static final String KEY_AUDIENCE = "audiences";
     String[] audience = null;
 
-    //    public static final String KEY_SIGNATURE_ALGORITHM = "signatureAlgorithm";
-    String signatureAlgorithm = "RS256";
-
     public static final String CFG_KEY_HOST_NAME_VERIFICATION_ENABLED = "hostNameVerificationEnabled";
     protected boolean hostNameVerificationEnabled = false;
 
@@ -102,6 +100,19 @@ public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig, JwtCons
 
     public static final String CFG_KEY_IGNORE_APP_AUTH_METHOD = "ignoreApplicationAuthMethod";
     protected boolean ignoreApplicationAuthMethod = true;
+
+    public static final String CFG_KEY_mapToUserRegistry = "mapToUserRegistry";
+    protected boolean mapToUserRegistry = false;
+
+    public static final String CFG_KEY_SIGALG = "signatureAlgorithm";
+
+    String signatureAlgorithm = "RS256";
+
+    public static final String KEY_authFilterRef = "authFilterRef";
+    protected String authFilterRef;
+
+    @com.ibm.websphere.ras.annotation.Sensitive
+    private String sharedKey;
 
     protected CommonConfigUtils configUtils = new CommonConfigUtils();
 
@@ -140,7 +151,7 @@ public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig, JwtCons
             Tr.entry(tc, methodName, cc, props);
         }
 
-        this.issuer = configUtils.getRequiredConfigAttribute(props, KEY_ISSUER);
+        this.issuer = configUtils.getConfigAttribute(props, KEY_ISSUER);//configUtils.getRequiredConfigAttribute(props, KEY_ISSUER);
 
         this.audience = configUtils.getStringArrayConfigAttribute(props, KEY_AUDIENCE);
         this.jwksUri = configUtils.getConfigAttribute(props, KEY_jwksUri);
@@ -153,7 +164,7 @@ public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig, JwtCons
         this.sslRef = configUtils.getConfigAttribute(props, KEY_sslRef);
         this.sslRefInfo = null; // lazy init
 
-        //this.authFilterRef = getConfigAttribute(props, KEY_authFilterRef);
+        this.authFilterRef = configUtils.getConfigAttribute(props, KEY_authFilterRef);
         //this.authFilter = null; // lazy init
 
         this.sslContext = null;
@@ -161,8 +172,11 @@ public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig, JwtCons
         this.hostNameVerificationEnabled = configUtils.getBooleanConfigAttribute(props, CFG_KEY_HOST_NAME_VERIFICATION_ENABLED, hostNameVerificationEnabled);
         this.tokenReuse = configUtils.getBooleanConfigAttribute(props, CFG_KEY_TOKEN_REUSE, tokenReuse);
         this.ignoreApplicationAuthMethod = configUtils.getBooleanConfigAttribute(props, CFG_KEY_IGNORE_APP_AUTH_METHOD, ignoreApplicationAuthMethod);
+        this.mapToUserRegistry = configUtils.getBooleanConfigAttribute(props, CFG_KEY_mapToUserRegistry, mapToUserRegistry);
         jwkSet = null; // the jwkEndpoint may have been changed during dynamic update
         consumerUtils = null; // the parameters in consumerUtils may have been changed during dynamic changing
+        this.signatureAlgorithm = configUtils.getConfigAttribute(props, CFG_KEY_SIGALG);
+        sharedKey = JwtUtils.processProtectedString(props, JwtUtils.CFG_KEY_SHARED_KEY);
 
         debug();
         if (tc.isDebugEnabled()) {
@@ -180,8 +194,11 @@ public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig, JwtCons
             Tr.debug(tc, "jwksUri:" + jwksUri);
             Tr.debug(tc, "userNameAttribute:" + userNameAttribute);
             Tr.debug(tc, "groupNameAttribute:" + groupNameAttribute);
-            //Tr.debug(tc, "authFilterRef = " + authFilterRef);
+            Tr.debug(tc, "mapToUserRegistry:" + mapToUserRegistry);
+            Tr.debug(tc, "authFilterRef = " + authFilterRef);
             Tr.debug(tc, "sslRef = " + sslRef);
+            Tr.debug(tc, "sigAlg = " + signatureAlgorithm);
+            Tr.debug(tc, "sharedKey" + sharedKey == null ? "null" : "*********");
         }
     }
 
@@ -206,7 +223,7 @@ public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig, JwtCons
     /** {@inheritDoc} */
     @Override
     public String getSharedKey() {
-        return null;
+        return sharedKey;
     }
 
     /** {@inheritDoc} */
@@ -449,6 +466,7 @@ public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig, JwtCons
         return clockSkewMilliSeconds;
     }
 
+    /** {@inheritDoc} */
     @Override
     public boolean getTokenReuse() {
         return this.tokenReuse;
@@ -459,6 +477,20 @@ public class MicroProfileJwtConfigImpl implements MicroProfileJwtConfig, JwtCons
     public boolean ignoreApplicationAuthMethod() {
         // TODO Auto-generated method stub
         return this.ignoreApplicationAuthMethod;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean getMapToUserRegistry() {
+        // TODO Auto-generated method stub
+        return this.mapToUserRegistry;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public String getAuthFilterRef() {
+        // TODO Auto-generated method stub
+        return this.authFilterRef;
     }
 
 }

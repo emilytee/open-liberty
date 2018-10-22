@@ -36,6 +36,7 @@ import org.eclipse.microprofile.jwt.Claims;
 import org.eclipse.microprofile.jwt.tck.util.TokenUtils;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.spec.WebArchive;
+import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -108,12 +109,18 @@ public class RolesAllowedTest extends FATServletClient {
                         .addClass(RolesEndpoint.class)
                         .addClass(TCKApplication.class)
                         .addAsWebInfResource("beans.xml", "beans.xml")
-                        .addAsWebInfResource("web.xml", "web.xml");
+                        .addAsWebInfResource("web.xml", "web.xml")
+                        .addAsManifestResource("permissions.xml"); 
         System.out.printf("WebArchive: %s\n", webArchive.toString(true));
         ShrinkHelper.exportToServer(server1, "apps", webArchive);
 
         baseURL = "http://localhost:" + server1.getHttpDefaultPort() + "/RolesAllowedTest";
         server1.startServer();
+    }
+
+    @AfterClass
+    public static void tearDown() throws Exception {
+        server1.stopServer("CWWKS552[2-4]E");
     }
 
     @BeforeClass

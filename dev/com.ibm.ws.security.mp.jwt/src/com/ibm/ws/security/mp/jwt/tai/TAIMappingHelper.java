@@ -23,6 +23,7 @@ import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Sensitive;
 import com.ibm.websphere.security.jwt.JwtToken;
 import com.ibm.ws.security.authentication.AuthenticationConstants;
+import com.ibm.ws.security.common.crypto.HashUtils;
 import com.ibm.ws.security.mp.jwt.MicroProfileJwtConfig;
 import com.ibm.ws.security.mp.jwt.TraceConstants;
 import com.ibm.ws.security.mp.jwt.error.MpJwtProcessingException;
@@ -36,12 +37,27 @@ public class TAIMappingHelper {
     @Sensitive
     String decodedTokenPayload = null;
     String username = null;
+    String realm = null;
     JwtPrincipalMapping claimToPrincipalMapping = null;
     MicroProfileJwtConfig config = null;
     JsonWebToken jwtPrincipal = null;
     Hashtable<String, Object> customProperties = new Hashtable<String, Object>();
+    protected static final String CCK_CLAIM = "sid";
+    protected static final String APR_CLAIM = "apr"; // custom auth provider
 
     TAIJwtUtils taiJwtUtils = new TAIJwtUtils();
+    //boolean addJwtPrincipalToSubject = false;
+
+    public TAIMappingHelper(@Sensitive String decodedPayload) throws MpJwtProcessingException {
+        decodedTokenPayload = decodedPayload;
+        config = null;
+        //addJwtPrincipalToSubject = true;
+        if (decodedTokenPayload != null) {
+            claimToPrincipalMapping = new JwtPrincipalMapping(decodedTokenPayload, "upn", "groups", false);
+            setUsername();
+            setRealm();
+        }
+    }
 
     public TAIMappingHelper(@Sensitive String decodedPayload, MicroProfileJwtConfig clientConfig) throws MpJwtProcessingException {
         String methodName = "<init>";
@@ -51,43 +67,66 @@ public class TAIMappingHelper {
         decodedTokenPayload = decodedPayload;
         config = clientConfig;
         if (decodedTokenPayload != null) {
-            claimToPrincipalMapping = new JwtPrincipalMapping(decodedTokenPayload, config.getUserNameAttribute(), config.getGroupNameAttribute(), false);
+            claimToPrincipalMapping = new JwtPrincipalMapping(decodedTokenPayload, config.getUserNameAttribute(), config.getGroupNameAttribute(), config.getMapToUserRegistry());
             setUsername();
+            setRealm();
         }
         if (tc.isDebugEnabled()) {
             Tr.exit(tc, methodName);
         }
     }
 
-    public void createJwtPrincipalAndPopulateCustomProperties(@Sensitive JwtToken jwtToken) throws MpJwtProcessingException {
+    /**
+     *
+     */
+    private void setRealm() {
+        this.realm = claimToPrincipalMapping.getMappedRealm();
+
+    }
+
+    public void createJwtPrincipalAndPopulateCustomProperties(@Sensitive JwtToken jwtToken, boolean addJwtPrincipal) throws MpJwtProcessingException {
         String methodName = "createJwtPrincipalAndPopulateCustomProperties";
         if (tc.isDebugEnabled()) {
             Tr.entry(tc, methodName, jwtToken);
         }
         jwtPrincipal = createJwtPrincipal(jwtToken);
         String issuer = getIssuer(jwtPrincipal);
-        if (issuer != null) {
-            customProperties = populateCustomProperties(issuer);
-        }
+        customProperties = populateCustomProperties(issuer, getmaptoURconfig(), addJwtPrincipal);
         if (tc.isDebugEnabled()) {
             Tr.exit(tc, methodName);
         }
     }
 
-    public Subject createSubjectFromCustomProperties(@Sensitive JwtToken jwt) {
+    /**
+     * @return
+     */
+    private boolean getmaptoURconfig() {
+
+        if (config != null) {
+            return config.getMapToUserRegistry();
+        }
+        return false;
+    }
+
+    public Subject createSubjectFromCustomProperties(boolean addJwtPrincipalToSubject) {
         String methodName = "createSubjectFromCustomProperties";
         if (tc.isDebugEnabled()) {
-            Tr.entry(tc, methodName, jwt);
+            Tr.entry(tc, methodName, addJwtPrincipalToSubject);
         }
         Subject subject = new Subject();
         //        if (jwt != null) {
         //            subject.getPrivateCredentials().add(jwt);
         //        }
-        customProperties.put(AttributeNameConstants.WSCREDENTIAL_SECURITYNAME, username);
+
+        if (addJwtPrincipalToSubject) {
+            subject.getPrincipals().add(jwtPrincipal);
+            customProperties.put(AuthenticationConstants.INTERNAL_ASSERTION_KEY, Boolean.TRUE);
+        }
         customProperties.put(AuthenticationConstants.INTERNAL_JSON_WEB_TOKEN, jwtPrincipal);
 
-        subject.getPrivateCredentials().add(jwtPrincipal);
+        //        subject.getPrivateCredentials().add(jwtPrincipal);
         subject.getPrivateCredentials().add(customProperties);
+
         if (tc.isDebugEnabled()) {
             Tr.exit(tc, methodName, subject);
         }
@@ -155,28 +194,107 @@ public class TAIMappingHelper {
         return jwtPrincipal.getIssuer();
     }
 
-    Hashtable<String, Object> populateCustomProperties(String issuer) {
+    Hashtable<String, Object> populateCustomProperties(String issuer, boolean mapToUR, boolean addJwtPrincipal) {
         String methodName = "populateCustomProperties";
         if (tc.isDebugEnabled()) {
             Tr.entry(tc, methodName, issuer);
         }
         Hashtable<String, Object> customProperties = new Hashtable<String, Object>();
 
-        String realm = getRealm(issuer);
-        String uniqueID = getUniqueId(realm);
-        List<String> groupswithrealm = getGroupsWithRealm(realm);
+        if (mapToUR) {
+            customProperties.put(AuthenticationConstants.INTERNAL_ASSERTION_KEY, Boolean.TRUE);
+            customProperties.put(AttributeNameConstants.WSCREDENTIAL_USERID, username);
+        } else {
+            if (realm == null && issuer != null) {
+                realm = getRealm(issuer);
+            }
+            String uniqueID = getUniqueId(realm);
+            List<String> groupswithrealm = getGroupsWithRealm(realm);
 
-        customProperties.put(AttributeNameConstants.WSCREDENTIAL_UNIQUEID, uniqueID);
-        if (realm != null && !realm.isEmpty()) {
-            customProperties.put(AttributeNameConstants.WSCREDENTIAL_REALM, realm);
+            customProperties.put(AttributeNameConstants.WSCREDENTIAL_UNIQUEID, uniqueID);
+            if (realm != null && !realm.isEmpty()) {
+                customProperties.put(AttributeNameConstants.WSCREDENTIAL_REALM, realm);
+            }
+            if (!groupswithrealm.isEmpty()) {
+                customProperties.put(AttributeNameConstants.WSCREDENTIAL_GROUPS, groupswithrealm);
+            }
+            customProperties.put(AttributeNameConstants.WSCREDENTIAL_SECURITYNAME, username);
+
         }
-        if (!groupswithrealm.isEmpty()) {
-            customProperties.put(AttributeNameConstants.WSCREDENTIAL_GROUPS, groupswithrealm);
+        if (!addJwtPrincipal) {
+            // add this only in the mpjwt tai flow
+            addCustomCacheKey(customProperties);
+        } else {
+            // jwtsso flow
+            // copy cache key and amr claims from the token to the custom properties, so that the new subject
+            // will have these values.
+            // TODO look at realm
+            addCustomClaimsFromToken(customProperties);
         }
+
         if (tc.isDebugEnabled()) {
             Tr.exit(tc, methodName, customProperties);
         }
+
         return customProperties;
+    }
+
+    /**
+     * @param customProperties
+     */
+    private void addCustomClaimsFromToken(Hashtable<String, Object> customProperties) {
+        String cck = getCustomCacheKey();
+        if (cck != null) {
+            customProperties.put(AttributeNameConstants.WSCREDENTIAL_CACHE_KEY, cck);
+        }
+        String apr = getCustomAuthProvider();
+        if (apr != null) {
+            if (tc.isDebugEnabled()) {
+                Tr.debug(tc, "apr claim is set in the token : ", apr);
+            }
+            customProperties.put(AuthenticationConstants.INTERNAL_AUTH_PROVIDER, apr);
+        }
+    }
+
+    /**
+     * @return
+     */
+    private String getCustomAuthProvider() {
+        if (jwtPrincipal != null) {
+            Object apr = jwtPrincipal.getClaim(APR_CLAIM);
+            if (apr != null && apr instanceof String) {
+                if (tc.isDebugEnabled()) {
+                    Tr.debug(tc, "apr claim is set in the token : ", (String) apr);
+                }
+                return (String) apr;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param customProperties
+     */
+    private void addCustomCacheKey(Hashtable<String, Object> customProperties) {
+
+        if (jwtPrincipal != null) {
+            String customCacheKey = HashUtils.digest(jwtPrincipal.getRawToken());
+            customProperties.put(AttributeNameConstants.WSCREDENTIAL_CACHE_KEY, customCacheKey);
+        }
+    }
+
+    /**
+     * @param jwtPrincipal
+     */
+    private String getCustomCacheKey() {
+
+        if (jwtPrincipal != null) {
+            Object cck = jwtPrincipal.getClaim(CCK_CLAIM);
+            if (cck != null) {
+                return (String) cck;
+            }
+        }
+        return null;
     }
 
     String getRealm(String issuer) {
@@ -186,6 +304,9 @@ public class TAIMappingHelper {
         }
         // Default realm to the issuer
         String realm = issuer;
+        if (isRealmEndsWithSlash(realm)) {
+            realm = updateRealm(realm);
+        }
 
         //        if (realm == null) {
         //            // runtime default
@@ -199,6 +320,23 @@ public class TAIMappingHelper {
             Tr.exit(tc, methodName, realm);
         }
         return realm;
+    }
+
+    /**
+     * @param realm
+     * @return
+     */
+    private boolean isRealmEndsWithSlash(String realm) {
+        return (realm != null && realm.length() > 1 && realm.endsWith("/"));
+    }
+
+    /**
+     * @param realm
+     * @return
+     */
+    private String updateRealm(String realm) {
+        // remove the trailing slash
+        return realm.substring(0, realm.length() - 1);
     }
 
     String getUniqueId(String realm) {

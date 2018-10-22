@@ -10,13 +10,11 @@
  *******************************************************************************/
 package com.ibm.ws.jsonb.fat;
 
-import org.jboss.shrinkwrap.api.ShrinkWrap;
-import org.jboss.shrinkwrap.api.spec.WebArchive;
+import static com.ibm.ws.jsonb.fat.FATSuite.JSONB_APP;
+
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.runner.RunWith;
-
-import com.ibm.websphere.simplicity.ShrinkHelper;
 
 import componenttest.annotation.Server;
 import componenttest.annotation.TestServlet;
@@ -25,25 +23,21 @@ import componenttest.custom.junit.runner.FATRunner;
 import componenttest.topology.impl.LibertyServer;
 import componenttest.topology.utils.FATServletClient;
 import web.jsonbtest.JSONBTestServlet;
-import web.jsonbtest.YassonTestServlet;
+import web.jsonbtest.JohnzonTestServlet;
 
 @RunWith(FATRunner.class)
 public class JSONBInAppTest extends FATServletClient {
-    private static final String appName = "jsonbapp";
 
     @Server("com.ibm.ws.jsonb.inapp")
     @TestServlets({
-                    @TestServlet(servlet = JSONBTestServlet.class, path = appName + "/JSONBTestServlet"),
-                    @TestServlet(servlet = YassonTestServlet.class, path = appName + "/YassonTestServlet")
+                    @TestServlet(servlet = JSONBTestServlet.class, contextRoot = JSONB_APP),
+                    @TestServlet(servlet = JohnzonTestServlet.class, contextRoot = JSONB_APP) // TODO: once https://github.com/eclipse-ee4j/jsonp/issues/78 is resolved, switch back to Yasson
     })
     public static LibertyServer server;
 
     @BeforeClass
     public static void setUp() throws Exception {
-        WebArchive app = ShrinkWrap.create(WebArchive.class, appName + ".war")
-                        .addPackage("web.jsonbtest");
-        ShrinkHelper.exportAppToServer(server, app);
-        server.addInstalledAppForValidation(appName);
+        FATSuite.jsonbApp(server);
         server.startServer();
     }
 

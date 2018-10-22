@@ -17,21 +17,28 @@ import java.util.Hashtable;
 import javax.management.NotificationBroadcasterSupport;
 
 import com.ibm.websphere.application.ApplicationMBean;
+import com.ibm.websphere.ras.Tr;
+import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.annotation.Trivial;
+import com.ibm.ws.app.manager.ApplicationManager;
 
 @Trivial
 public final class ApplicationConfig {
+
+    private static final TraceComponent tc = Tr.register(ApplicationConfig.class);
+
     private final String _configPid;
     private final Dictionary<String, ?> _config;
+    private final ApplicationManager _applicationManager;
     private final String _location;
     private final String _type;
     private final String _name;
     private NotificationBroadcasterSupport _notificationBroadcasterSupport;
 
-    public ApplicationConfig(String configPid, Dictionary<String, ?> config) {
+    public ApplicationConfig(String configPid, Dictionary<String, ?> config, ApplicationManager applicationManager) {
         _configPid = configPid;
         _config = config;
-
+        _applicationManager = applicationManager;
         _location = (String) config.get(AppManagerConstants.LOCATION);
         String type = (String) config.get(AppManagerConstants.TYPE);
         if (type == null) {
@@ -59,7 +66,51 @@ public final class ApplicationConfig {
             }
         }
         _name = name;
+
+        displayJandexMessages();
     }
+
+    private static boolean ONE_TIME_JANDEX_MSGS_DISPLAYED = false;
+
+    private void displayJandexMessages() {
+
+        boolean appMgr_useJandex = _applicationManager.getUseJandex();
+
+        // Display a message once if useJandex is set to true on the applicationManager.
+        // This causes the default useJandex setting for each application to be set to true.
+        if (!ONE_TIME_JANDEX_MSGS_DISPLAYED) {
+            if (appMgr_useJandex) {
+                Tr.info(tc, "APPLICATION_JANDEX_ENABLED_ALL");
+            }
+            ONE_TIME_JANDEX_MSGS_DISPLAYED = true;
+        }
+
+        // The application setting overrides the applicationManager setting.
+        if (_config != null) {
+            Object application_useJandex = _config.get(AppManagerConstants.USE_JANDEX);
+            if (application_useJandex instanceof Boolean) {
+
+                if ((Boolean) application_useJandex) {
+                    Tr.info(tc, "APPLICATION_JANDEX_ENABLED", _name);
+                } else {
+                    Tr.info(tc, "APPLICATION_JANDEX_DISABLED", _name);
+                }
+                return;
+            }
+        }
+
+        // Apparently, useJandex not set on the application.  So default to the appMgr setting.
+        if (appMgr_useJandex) {
+            Tr.info(tc, "APPLICATION_JANDEX_ENABLED", _name);
+
+        } else {
+            // Display nothing.  Since they are taking the defaults.
+        }
+    }
+
+    //public ApplicationConfig(String configPid, Dictionary<String, ?> config) {
+    //    this(configPid, config, null);
+    //}
 
     public void setMBeanNotifier(NotificationBroadcasterSupport broadcaster) {
         _notificationBroadcasterSupport = broadcaster;
@@ -131,6 +182,20 @@ public final class ApplicationConfig {
             }
         }
         return true;
+    }
+
+    public boolean getUseJandex() {
+        // First try to get the value from the application configuration
+        // which overrides the value on the application manager configuration.
+        if (_config != null) {
+            Object result = _config.get(AppManagerConstants.USE_JANDEX);
+            if (result instanceof Boolean) {
+                return (Boolean) result;
+            }
+        }
+
+        // If that fails, try to get the value from the application manager
+        return _applicationManager.getUseJandex();
     }
 
     void describe(StringBuilder sb) {

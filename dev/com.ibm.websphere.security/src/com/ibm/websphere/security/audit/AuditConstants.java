@@ -22,10 +22,12 @@ public class AuditConstants {
     static public final String MAX_FILE_SIZE = "maxFileSize";
     static public final String ENCRYPT = "encrypt";
     static public final String SIGN = "sign";
-    static public final String ENCRYPT_ALIAS = "encrpytAlias";
+    static public final String ENCRYPT_ALIAS = "encryptAlias";
     static public final String ENCRYPT_KEYSTORE_REF = "encryptKeyStoreRef";
     static public final String SIGNER_ALIAS = "signerAlias";
     static public final String SIGNER_KEYSTORE_REF = "signerKeyStoreRef";
+    static public final String SIGNING_ALIAS = "signingAlias";
+    static public final String SIGNING_KEYSTORE_REF = "signingKeyStoreRef";
     static public final String WRAP_BEHAVIOR = "wrapBehavior";
     static public final String LOG_DIRECTORY = "logDirectory";
     static public final String EVENTS = "events";
@@ -36,6 +38,7 @@ public class AuditConstants {
     static public final String AUDIT_DATA = "auditData";
     static public final String OUTCOME = "outcome";
     static public final String EVENT_SEQUENCE_NUMBER = "eventSequenceNumber";
+    static public final String LOGGING_SEQUENCE_NUMBER = "loggingSequenceNumber";
 
     static public final String CONFIG_SNAPSHOT = "CONFIG_SNAPSHOT";
     static public final String SECURITY_AUDIT_MGMT = "SECURITY_AUDIT_MGMT";
@@ -61,8 +64,11 @@ public class AuditConstants {
     static public final String SECURITY_JMS_AUTHN = "SECURITY_JMS_AUTHN";
     static public final String SECURITY_JMS_AUTHZ = "SECURITY_JMS_AUTHZ";
     static public final String SECURITY_JMS_AUTHN_TERMINATE = "SECURITY_JMS_AUTHN_TERMINATE";
-    static public final String JMX_MBEANS = "JMX_MBEANS";
+    static public final String SECURITY_JMS_CLOSED_CONNECTION = "SECURITY_JMS_CLOSED_CONNECTION";
+    static public final String JMX_MBEAN = "JMX_MBEAN";
     static public final String JMX_NOTIFICATION = "JMX_NOTIFICATION";
+    static public final String JMX_MBEAN_ATTRIBUTES = "JMX_MBEAN_ATTRIBUTES";
+    static public final String JMX_MBEAN_REGISTER = "JMX_MBEAN_REGISTER";
     static public final String JMS = "JMS";
     static public final String CUSTOM = "CUSTOM";
 
@@ -74,8 +80,8 @@ public class AuditConstants {
                                                                          "SECURITY_AUTHN_TERMINATE", "SECURITY_AUTHZ",
                                                                          "SECURITY_SIGNING", "SECURITY_ENCRYPTION", "SECURITY_RESOURCE_ACCESS", "SECURITY_MGMT_KEY",
                                                                          "SECURITY_RUNTIME_KEY", "SECURITY_JMS_AUTHN", "SECURITY_JMS_AUTHZ", "SECURITY_JMS_AUTHN_TERMINATE",
-                                                                         "JMX_MBEANS", "JMX_NOTIFICATION",
-                                                                         "JMS", "CUSTOM");
+                                                                         "SECURITY_JMS_CLOSED_CONNECTION",
+                                                                         "JMX_MBEAN", "JMX_NOTIFICATION", "JMX_MBEAN_ATTRIBUTES", "JMX_MBEAN_REGISTER", "JMS", "CUSTOM");
 
     static public final String SUCCESS = "success";
     static public final String FAILURE = "failure";

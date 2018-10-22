@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2017 IBM Corporation and others.
+ * Copyright (c) 2012, 2018 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -14,8 +14,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Queue;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -26,14 +30,25 @@ import com.ibm.websphere.logging.WsLevel;
 import com.ibm.websphere.ras.Tr;
 import com.ibm.websphere.ras.TraceComponent;
 import com.ibm.websphere.ras.TruncatableThrowable;
+import com.ibm.ws.collector.manager.buffer.BufferManagerEMQHelper;
+import com.ibm.ws.collector.manager.buffer.BufferManagerImpl;
+import com.ibm.ws.collector.manager.buffer.SimpleRotatingSoftQueue;
 import com.ibm.ws.kernel.boot.logging.LoggerHandlerManager;
+import com.ibm.ws.kernel.boot.logging.WsLogManager;
 import com.ibm.ws.logging.RoutedMessage;
 import com.ibm.ws.logging.WsLogHandler;
 import com.ibm.ws.logging.WsMessageRouter;
 import com.ibm.ws.logging.WsTraceRouter;
+import com.ibm.ws.logging.collector.CollectorConstants;
 import com.ibm.ws.logging.internal.PackageProcessor;
 import com.ibm.ws.logging.internal.TraceSpecification;
 import com.ibm.ws.logging.internal.WsLogRecord;
+import com.ibm.ws.logging.source.LogSource;
+import com.ibm.ws.logging.source.TraceSource;
+import com.ibm.ws.logging.utils.CollectorManagerPipelineUtils;
+import com.ibm.ws.logging.utils.FileLogHolder;
+import com.ibm.ws.logging.utils.RecursionCounter;
+import com.ibm.wsspi.collector.manager.SynchronousHandler;
 import com.ibm.wsspi.logging.LogHandler;
 import com.ibm.wsspi.logging.MessageRouter;
 import com.ibm.wsspi.logprovider.LogProviderConfig;
@@ -108,6 +123,13 @@ public class BaseTraceService implements TrService {
     public static final Logger NULL_LOGGER = null;
     public static final String NULL_FORMATTED_MSG = null;
 
+    protected static RecursionCounter counterForTraceRouter = new RecursionCounter();
+    protected static RecursionCounter counterForTraceSource = new RecursionCounter();
+    protected static RecursionCounter counterForTraceWriter = new RecursionCounter();
+    protected static RecursionCounter counterForLogSource = new RecursionCounter();
+
+    private static final int MINUTE = 60000;
+
     /**
      * Trivial interface for writing "trace" records (this includes logging to messages.log)
      */
@@ -161,12 +183,27 @@ public class BaseTraceService implements TrService {
     /** True if java.lang.instrument is available for trace. */
     private boolean javaLangInstrument;
 
+    /** Check to see if HPEL is enabled **/
+    private boolean isHpelEnabled;
+
     /** Configured message Ids to be suppressed in console/message.log */
     private volatile Collection<String> hideMessageids;
 
     /** Early msgs issued before MessageRouter is started. */
-    private final Queue<RoutedMessage> earlierMessages = new SimpleRotatingSoftQueue<RoutedMessage>(new RoutedMessage[100]);
-    private final Queue<RoutedMessage> earlierTraces = new SimpleRotatingSoftQueue<RoutedMessage>(new RoutedMessage[200]);
+    protected volatile Queue<RoutedMessage> earlierMessages = new SimpleRotatingSoftQueue<RoutedMessage>(new RoutedMessage[100]);
+    protected volatile Queue<RoutedMessage> earlierTraces = new SimpleRotatingSoftQueue<RoutedMessage>(new RoutedMessage[200]);
+
+    protected volatile LogSource logSource = null;
+    protected volatile TraceSource traceSource = null;
+    protected volatile MessageLogHandler messageLogHandler = null;
+    protected volatile ConsoleLogHandler consoleLogHandler = null;
+    protected volatile BufferManagerImpl logConduit;
+    protected volatile BufferManagerImpl traceConduit;
+    protected volatile CollectorManagerPipelineUtils collectorMgrPipelineUtils = null;
+    protected volatile Timer earlyMessageTraceKiller_Timer = new Timer();
+
+    protected volatile String serverName = null;
+    protected volatile String wlpUserDir = null;
 
     /** Flags for suppressing traceback output to the console */
     private static class StackTraceFlags {
@@ -188,6 +225,8 @@ public class BaseTraceService implements TrService {
     public BaseTraceService() {
         systemOut = new SystemLogHolder(LoggingConstants.SYSTEM_OUT, System.out);
         systemErr = new SystemLogHolder(LoggingConstants.SYSTEM_ERR, System.err);
+
+        earlyMessageTraceKiller_Timer.schedule(new EarlyMessageTraceCleaner(), 5 * MINUTE); // 5 minutes wait time
     }
 
     /**
@@ -202,13 +241,17 @@ public class BaseTraceService implements TrService {
      */
     @Override
     public void init(LogProviderConfig config) {
+        // Check to see if the Log provider is Binary Logging
+        isHpelEnabled = WsLogManager.isBinaryLoggingEnabled();
+
         update(config);
 
         registerLoggerHandlerSingleton();
-
         // Capture System.out/.err after registerLoggerHandler has initialized
         // LogManager, which might print errors due to misconfiguration.
         captureSystemStreams();
+        //Remove EMQ from BufferManager after a certain amount of time has passed
+        BufferManagerEMQHelper.removeEMQByTimer();
     }
 
     protected void registerLoggerHandlerSingleton() {
@@ -250,8 +293,9 @@ public class BaseTraceService implements TrService {
         consoleLogLevel = trConfig.getConsoleLogLevel();
         copySystemStreams = trConfig.copySystemStreams();
         hideMessageids = trConfig.getMessagesToHide();
-        //add hideMessageIds to log header. This is printed when its configured in bootstrap.properties
-        if (hideMessageids.size() > 0) {
+        //add hideMessageIds to log header, only for default logging, since for binary logging, the messages will be only hidden in console.log.
+        //This is printed when its configured in bootstrap.properties
+        if (hideMessageids.size() > 0 && !isHpelEnabled) {
             logHeader = logHeader.concat("Suppressed message ids: " + hideMessageids).concat((LoggingConstants.nl));
         }
         if (formatter == null || trConfig.getTraceFormat() != formatter.getTraceFormat()) {
@@ -266,9 +310,157 @@ public class BaseTraceService implements TrService {
 
         initializeWriters(trConfig);
         if (hideMessageids.size() > 0) {
-            Tr.info(TraceSpecification.getTc(), "MESSAGES_CONFIGURED_HIDDEN_2", new Object[] { hideMessageids });
+            String msgKey = isHpelEnabled ? "MESSAGES_CONFIGURED_HIDDEN_HPEL" : "MESSAGES_CONFIGURED_HIDDEN_2";
+            Tr.info(TraceSpecification.getTc(), msgKey, new Object[] { hideMessageids });
         }
 
+        /*
+         * Need to know the values of wlpServerName and wlpUserDir
+         * They are passed into the handlers for use as part of the jsonified output
+         */
+        serverName = trConfig.getServerName();
+        wlpUserDir = trConfig.getWlpUsrDir();
+
+        //Retrieve collectormgrPiplineUtils
+        if (collectorMgrPipelineUtils == null) {
+            collectorMgrPipelineUtils = CollectorManagerPipelineUtils.getInstance();
+        }
+
+        //Sources
+        logSource = collectorMgrPipelineUtils.getLogSource();
+        traceSource = collectorMgrPipelineUtils.getTraceSource();
+
+        //Conduits
+        logConduit = collectorMgrPipelineUtils.getLogConduit();
+        traceConduit = collectorMgrPipelineUtils.getTraceConduit();
+
+        /*
+         * Retrieve the format setting for message.log and console
+         */
+        String messageFormat = trConfig.getMessageFormat();
+        String consoleFormat = trConfig.getConsoleFormat();
+
+        //Retrieve the source lists of both message and console
+        List<String> messageSourceList = new ArrayList<String>(trConfig.getMessageSource());
+        List<String> consoleSourceList = new ArrayList<String>(trConfig.getConsoleSource());
+
+        /*
+         * Filter out Message and Trace from messageSourceList
+         * This is so that Handler doesn't 'subscribe' message or trace
+         * and kicks off an undesired BufferManagerImpl instance.
+         */
+        List<String> filterdMessageSourceList = filterSourcelist(messageSourceList);
+        List<String> filterdConsoleSourceList = filterSourcelist(consoleSourceList);
+
+        /*
+         * Create the MessageLogHandler and ConsoleLogHandler if they do not exist yet.
+         * If we do not then they will not be appropriately registered with CollectorManager
+         * when the CollectorManagerConfigurator is registering services. The consequence is that
+         * if the user wishes to switch to 'json' messages or console at a later time (other than
+         * startup) they will not be able to subscribe to accessLog and ffdc sources.
+         */
+        if (messageLogHandler == null && messagesLog != null) {
+            messageLogHandler = new MessageLogHandler(serverName, wlpUserDir, filterdMessageSourceList);
+            collectorMgrPipelineUtils.setMessageHandler(messageLogHandler);
+            messageLogHandler.setWriter(messagesLog);
+        }
+
+        if (consoleLogHandler == null) {
+            consoleLogHandler = new ConsoleLogHandler(serverName, wlpUserDir, filterdConsoleSourceList);
+            collectorMgrPipelineUtils.setConsoleHandler(consoleLogHandler);
+            consoleLogHandler.setWriter(systemOut, systemErr);
+            consoleLogHandler.setBaseTraceService(this);
+        }
+
+        commonMessageLogHandlerUpdates();
+        commonConsoleLogHandlerUpdates();
+
+        /*
+         * If messageFormat has been configured to 'basic' - ensure that we are not connecting conduits/bufferManagers to the handler
+         * otherwise we would have the undesired effect of writing both 'basic' and 'json' formatted message events
+         */
+        if (messageFormat.toLowerCase().equals(LoggingConstants.DEFAULT_MESSAGE_FORMAT)) {
+            if (messageLogHandler != null) {
+                messageLogHandler.setFormat(LoggingConstants.DEFAULT_MESSAGE_FORMAT);
+                messageLogHandler.modified(new ArrayList<String>());
+                ArrayList<String> filteredList = new ArrayList<String>();
+                filteredList.add(LoggingConstants.DEFAULT_CONSOLE_SOURCE);
+                updateConduitSyncHandlerConnection(filteredList, messageLogHandler);
+            }
+        }
+
+        /*
+         * If consoleFormat has been configured to 'basic' - ensure that we are not connecting conduits/bufferManagers to the handler
+         * otherwise we would have the undesired effect of writing both 'basic' and 'json' formatted message events
+         */
+        if (consoleFormat.toLowerCase().equals(LoggingConstants.DEFAULT_CONSOLE_FORMAT)) {
+            if (consoleLogHandler != null) {
+                consoleLogHandler.setFormat(LoggingConstants.DEFAULT_CONSOLE_FORMAT);
+                ArrayList<String> filteredList = new ArrayList<String>();
+                filteredList.add(LoggingConstants.DEFAULT_CONSOLE_SOURCE);
+                if (traceLog == systemOut) {
+                    filteredList.add(LoggingConstants.DEFAULT_TRACE_SOURCE);
+                    consoleLogHandler.setTraceStdout(true);
+                } else {
+                    consoleLogHandler.setTraceStdout(false);
+                }
+                consoleLogHandler.modified(new ArrayList<String>());
+                updateConduitSyncHandlerConnection(filteredList, consoleLogHandler);
+            }
+        }
+
+        /*
+         * If messageFormat has been configured to 'json', create the messageLogHandler as necessary or
+         * call modified as necessary, provide it to the collectorMgrPipleLinUtils as necessary and set the
+         * messageJsonConfigured flag as appropriate and update the connection between the unique message
+         * and trace conduits to the handler.
+         */
+        if (messageFormat.toLowerCase().equals(LoggingConstants.JSON_FORMAT)) {
+            if (messageLogHandler != null) {
+                messageLogHandler.setFormat(LoggingConstants.JSON_FORMAT);
+                //Connect the conduits to the handler as necessary
+                messageLogHandler.modified(filterdMessageSourceList);
+                updateConduitSyncHandlerConnection(messageSourceList, messageLogHandler);
+            }
+
+        }
+
+        /*
+         * If consoleFormat has been configured to 'json', create the consoleLogHandler as necessary or
+         * call modified as necessary, provide it to the collectorMgrPipleLinUtils as necessary and set the
+         * consoleJsonConfigured flag as appropriate and update the connection between the unique message
+         * and trace conduits to the handler.
+         */
+        if (consoleFormat.toLowerCase().equals(LoggingConstants.JSON_FORMAT)) {
+            if (consoleLogHandler != null) {
+                consoleLogHandler.setFormat(LoggingConstants.JSON_FORMAT);
+                //Connect the conduits to the handler as necessary
+                //if json && messages, trace sourcelist
+                consoleLogHandler.modified(filterdConsoleSourceList);
+                updateConduitSyncHandlerConnection(consoleSourceList, consoleLogHandler);
+            }
+        }
+    }
+
+    /**
+     * common consoleLogHandler
+     */
+    private void commonConsoleLogHandlerUpdates() {
+        if (consoleLogHandler != null) {
+            consoleLogHandler.setBasicFormatter(formatter);
+            consoleLogHandler.setConsoleLogLevel(consoleLogLevel.intValue());
+            consoleLogHandler.setCopySystemStreams(copySystemStreams);
+        }
+    }
+
+    /**
+     * common MessageLogHandlerUpdates
+     */
+    private void commonMessageLogHandlerUpdates() {
+        if (messageLogHandler != null) {
+            messageLogHandler.setWriter(messagesLog);
+            messageLogHandler.setBasicFormatter(formatter);
+        }
     }
 
     /**
@@ -433,24 +625,22 @@ public class BaseTraceService implements TrService {
      */
     public void echo(SystemLogHolder holder, LogRecord logRecord) {
         TraceWriter detailLog = traceLog;
-
         // Tee to messages.log (always)
-        String message = formatter.messageLogFormat(logRecord, logRecord.getMessage());
-        messagesLog.writeRecord(message);
-        invokeMessageRouters(new RoutedMessageImpl(logRecord.getMessage(), logRecord.getMessage(), message, logRecord));
 
-        if (detailLog == systemOut) {
-            // preserve System.out vs. System.err
-            publishTraceLogRecord(holder, logRecord, NULL_ID, NULL_FORMATTED_MSG, NULL_FORMATTED_MSG);
+        RoutedMessage routedMessage = null;
+        if (externalMessageRouter.get() != null) {
+            String message = formatter.messageLogFormat(logRecord, logRecord.getMessage());
+            routedMessage = new RoutedMessageImpl(logRecord.getMessage(), logRecord.getMessage(), message, logRecord);
         } else {
-            if (copySystemStreams) {
-                // Tee to console.log if we are copying System.out and System.err to system streams.
-                writeFilteredStreamOutput(holder, logRecord);
-            }
-
-            if (TraceComponent.isAnyTracingEnabled()) {
-                publishTraceLogRecord(detailLog, logRecord, NULL_ID, NULL_FORMATTED_MSG, NULL_FORMATTED_MSG);
-            }
+            routedMessage = new RoutedMessageImpl(logRecord.getMessage(), logRecord.getMessage(), null, logRecord);
+        }
+        invokeMessageRouters(routedMessage);
+        if (logSource != null) {
+            publishToLogSource(routedMessage);
+        }
+        //send events to handlers
+        if (TraceComponent.isAnyTracingEnabled()) {
+            publishTraceLogRecord(detailLog, logRecord, NULL_ID, NULL_FORMATTED_MSG, NULL_FORMATTED_MSG);
         }
     }
 
@@ -499,8 +689,14 @@ public class BaseTraceService implements TrService {
         }
         if (internalMsgRouter != null) {
             retMe &= internalMsgRouter.route(routedMessage);
-        } else {
-            earlierMessages.add(routedMessage);
+        } else if (earlierMessages != null) {
+            String message = formatter.messageLogFormat(routedMessage.getLogRecord(), routedMessage.getFormattedVerboseMsg());
+            RoutedMessage specialRoutedMessage = new RoutedMessageImpl(routedMessage.getFormattedMsg(), routedMessage.getFormattedVerboseMsg(), message, routedMessage.getLogRecord());
+            synchronized (this) {
+                if (earlierMessages != null) {
+                    earlierMessages.add(specialRoutedMessage);
+                }
+            }
         }
         return retMe;
     }
@@ -512,20 +708,36 @@ public class BaseTraceService implements TrService {
 
         boolean retMe = true;
         LogRecord logRecord = routedTrace.getLogRecord();
-        if (logRecord != null) {
-            Level level = logRecord.getLevel();
-            int levelValue = level.intValue();
-            if (levelValue < Level.INFO.intValue()) {
-                String levelName = level.getName();
-                if (!(levelName.equals("SystemOut") || levelName.equals("SystemErr"))) { //SystemOut/Err=700
-                    WsTraceRouter internalTrRouter = internalTraceRouter.get();
-                    if (internalTrRouter != null) {
-                        retMe &= internalTrRouter.route(routedTrace);
-                    } else {
-                        earlierTraces.add(routedTrace);
+        /*
+         * Avoid any feedback traces that are emitted after this point.
+         * The first time the counter increments is the first pass-through.
+         * The second time the counter increments is the second pass-through due
+         * to trace emitted. We do not want any more pass-throughs.
+         */
+        try {
+            if (!(counterForTraceRouter.incrementCount() > 2)) {
+                if (logRecord != null) {
+                    Level level = logRecord.getLevel();
+                    int levelValue = level.intValue();
+                    if (levelValue < Level.INFO.intValue()) {
+                        String levelName = level.getName();
+                        if (!(levelName.equals("SystemOut") || levelName.equals("SystemErr"))) { //SystemOut/Err=700
+                            WsTraceRouter internalTrRouter = internalTraceRouter.get();
+                            if (internalTrRouter != null) {
+                                retMe &= internalTrRouter.route(routedTrace);
+                            } else if (earlierTraces != null) {
+                                synchronized (this) {
+                                    if (earlierTraces != null) {
+                                        earlierTraces.add(routedTrace);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
+        } finally {
+            counterForTraceRouter.decrementCount();
         }
         return retMe;
     }
@@ -551,13 +763,19 @@ public class BaseTraceService implements TrService {
 
             formattedMsg = formatter.formatMessage(logRecord);
             formattedVerboseMsg = formatter.formatVerboseMessage(logRecord, formattedMsg);
-            String messageLogFormat = formatter.messageLogFormat(logRecord, formattedVerboseMsg);
 
+            RoutedMessage routedMessage = null;
+            if (externalMessageRouter.get() != null) {
+                String message = formatter.messageLogFormat(logRecord, formattedVerboseMsg);
+                routedMessage = new RoutedMessageImpl(formattedMsg, formattedVerboseMsg, message, logRecord);
+            } else {
+                routedMessage = new RoutedMessageImpl(formattedMsg, formattedVerboseMsg, null, logRecord);
+            }
             // Look for external log handlers. They may suppress "normal" log
             // processing, which would prevent it from showing up in other logs.
             // This has to be checked in this method: direct invocation of system.out
             // and system.err are not subject to message routing.
-            boolean logNormally = invokeMessageRouters(new RoutedMessageImpl(formattedMsg, formattedVerboseMsg, messageLogFormat, logRecord));
+            boolean logNormally = invokeMessageRouters(routedMessage);
             if (!logNormally)
                 return;
 
@@ -567,30 +785,15 @@ public class BaseTraceService implements TrService {
                 return;
             }
 
-            // messages.log
-            messagesLog.writeRecord(messageLogFormat);
+            /*
+             * Messages sent through LogSource will be received by MessageLogHandler and ConsoleLogHandler
+             * if messageFormat and consoleFormat have been set to "json" and "message" is a listed source.
+             * However, LogstashCollector and BluemixLogCollector will receive all messages
+             */
 
-            // console.log
-            if (detailLog == systemOut) {
-                // Send all messages directly to the correct system streams, and then be DONE
-                if (levelValue == WsLevel.ERROR.intValue() || levelValue == WsLevel.FATAL.intValue()) {
-                    // WsLevel.ERROR and Level.SEVERE have the same int value, and are routed to System.err
-                    publishTraceLogRecord(systemErr, logRecord, NULL_ID, formattedMsg, formattedVerboseMsg);
-                } else {
-                    // messages othwerwise above the filter are routed to System.out
-                    publishTraceLogRecord(systemOut, logRecord, NULL_ID, formattedMsg, formattedVerboseMsg);
-                }
-                return; // DONE!!
-            } else if (levelValue >= consoleLogLevel.intValue()) {
-                // Only route messages permitted by consoleLogLevel
-                String consoleMsg = formatter.consoleLogFormat(logRecord, formattedMsg);
-                if (levelValue == WsLevel.ERROR.intValue() || levelValue == WsLevel.FATAL.intValue()) {
-                    // WsLevel.ERROR and Level.SEVERE have the same int value, and are routed to System.err
-                    writeStreamOutput(systemErr, consoleMsg, false);
-                } else {
-                    // messages othwerwise above the filter are routed to system out
-                    writeStreamOutput(systemOut, consoleMsg, false);
-                }
+            // logSource only receives "normal" messages and messages that are not hidden.
+            if (logSource != null) {
+                publishToLogSource(routedMessage);
             }
         }
 
@@ -606,6 +809,19 @@ public class BaseTraceService implements TrService {
     }
 
     /**
+     * @param routedMessage
+     */
+    protected void publishToLogSource(RoutedMessage routedMessage) {
+        try {
+            if (!(counterForLogSource.incrementCount() > 2)) {
+                logSource.publish(routedMessage);
+            }
+        } finally {
+            counterForLogSource.decrementCount();
+        }
+    }
+
+    /**
      * Publish a trace log record.
      *
      * @param detailLog the trace writer
@@ -615,16 +831,49 @@ public class BaseTraceService implements TrService {
      * @param formattedVerboseMsg the result of {@link BaseTraceFormatter#formatVerboseMessage}
      */
     protected void publishTraceLogRecord(TraceWriter detailLog, LogRecord logRecord, Object id, String formattedMsg, String formattedVerboseMsg) {
+        //check if tracefilename is stdout
         if (formattedVerboseMsg == null) {
             formattedVerboseMsg = formatter.formatVerboseMessage(logRecord, formattedMsg, false);
         }
-        String traceDetail = formatter.traceLogFormat(logRecord, id, formattedMsg, formattedVerboseMsg);
-        invokeTraceRouters(new RoutedMessageImpl(formattedMsg, formattedVerboseMsg, traceDetail, logRecord));
+        RoutedMessage routedTrace = new RoutedMessageImpl(formattedMsg, formattedVerboseMsg, null, logRecord);
 
-        if (detailLog == systemOut || detailLog == systemErr) {
-            writeStreamOutput((SystemLogHolder) detailLog, traceDetail, false);
-        } else {
-            detailLog.writeRecord(traceDetail);
+        invokeTraceRouters(routedTrace);
+
+        /*
+         * Avoid any feedback traces that are emitted after this point.
+         * The first time the counter increments is the first pass-through.
+         * The second time the counter increments is the second pass-through due
+         * to trace emitted. We do not want any more pass-throughs.
+         */
+        try {
+            if (!(counterForTraceSource.incrementCount() > 2)) {
+                if (logRecord != null) {
+                    Level level = logRecord.getLevel();
+                    int levelValue = level.intValue();
+                    if (levelValue < Level.INFO.intValue()) {
+                        String levelName = level.getName();
+                        if (!(levelName.equals("SystemOut") || levelName.equals("SystemErr"))) { //SystemOut/Err=700
+                            if (traceSource != null) {
+                                traceSource.publish(routedTrace, id);
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            counterForTraceSource.decrementCount();
+        }
+
+        try {
+            if (!(counterForTraceWriter.incrementCount() > 1)) {
+                // write to trace.log
+                if (detailLog != systemOut) {
+                    String traceDetail = formatter.traceLogFormat(logRecord, id, formattedMsg, formattedVerboseMsg);
+                    detailLog.writeRecord(traceDetail);
+                }
+            }
+        } finally {
+            counterForTraceWriter.decrementCount();
         }
     }
 
@@ -660,7 +909,6 @@ public class BaseTraceService implements TrService {
      * Inject the internal WsMessageRouter.
      */
     protected void setWsMessageRouter(WsMessageRouter msgRouter) {
-
         internalMessageRouter.set(msgRouter);
 
         // Pass the earlierMessages queue to the router.
@@ -668,7 +916,16 @@ public class BaseTraceService implements TrService {
         // NOT add any more messages to the earlierMessages queue.
         // The MessageRouter basically owns the earlierMessages queue
         // from now on.
-        msgRouter.setEarlierMessages(earlierMessages);
+
+        if (earlierMessages != null) {
+            synchronized (this) {
+                if (earlierMessages != null) {
+                    msgRouter.setEarlierMessages(earlierMessages);
+                }
+            }
+        } else {
+            msgRouter.setEarlierMessages(null);
+        }
     }
 
     /**
@@ -691,7 +948,15 @@ public class BaseTraceService implements TrService {
         // NOT add any more messages to the earlierMessages queue.
         // The MessageRouter basically owns the earlierMessages queue
         // from now on.
-        traceRouter.setEarlierTraces(earlierTraces);
+        if (earlierTraces != null) {
+            synchronized (this) {
+                if (earlierTraces != null) {
+                    traceRouter.setEarlierTraces(earlierTraces);
+                }
+            }
+        } else {
+            traceRouter.setEarlierTraces(null);
+        }
     }
 
     /**
@@ -738,6 +1003,7 @@ public class BaseTraceService implements TrService {
                 ((FileLogHolder) traceLog).releaseFile();
             }
         }
+
     }
 
     private FileLogHeader newFileLogHeader(boolean trace) {
@@ -891,7 +1157,7 @@ public class BaseTraceService implements TrService {
      * @return null if the stack trace should be suppressed, or an indicator we're suppressing,
      *         or maybe the original stack trace
      */
-    private String filterStackTraces(String txt) {
+    public static String filterStackTraces(String txt) {
         // Check for stack traces, which we may want to trim
         StackTraceFlags stackTraceFlags = traceFlags.get();
         // We have a little thread-local state machine here with four states controlled by two
@@ -937,5 +1203,56 @@ public class BaseTraceService implements TrService {
             stackTraceFlags.needsToOutputInternalPackageMarker = false;
         }
         return txt;
+    }
+
+    /*
+     * Helper method to clean up the original source list by removing messages and
+     * trace from it. Otherwise, our json handlers will subscribe these and cause
+     * collectorManager to create 'new' conduits/Buffermanagers.
+     */
+    private List<String> filterSourcelist(List<String> sourceList) {
+        List<String> filteredList = new ArrayList<String>(sourceList);
+        filteredList.remove(CollectorConstants.TRACE_CONFIG_VAL);
+        filteredList.remove(CollectorConstants.MESSAGES_CONFIG_VAL);
+        return filteredList;
+    }
+
+    /*
+     * Based on config (sourceList), need to connect the synchronized handler to configured source/conduit..
+     * Or disconnect it.
+     */
+    private void updateConduitSyncHandlerConnection(List<String> sourceList, SynchronousHandler handler) {
+        if (sourceList.contains("message")) {
+            logConduit.addSyncHandler(handler);
+        } else {
+            logConduit.removeSyncHandler(handler);
+        }
+
+        if (sourceList.contains("trace")) {
+            traceConduit.addSyncHandler(handler);
+        } else {
+            traceConduit.removeSyncHandler(handler);
+        }
+    }
+
+    private class EarlyMessageTraceCleaner extends TimerTask {
+        @Override
+        public void run() {
+            synchronized (BaseTraceService.this) {
+                earlierMessages = null;
+                earlierTraces = null;
+
+                /*
+                 * With earlierMessages and earlierTraces set to null now,
+                 * calling setWsMessageRouter and setTraceRouter will
+                 * subsequently null out the earlyMessageQueue and earlyTraceQueue
+                 * in their respective routers
+                 */
+                if (internalMessageRouter.get() != null)
+                    BaseTraceService.this.setWsMessageRouter(internalMessageRouter.get());
+                if (internalTraceRouter.get() != null)
+                    BaseTraceService.this.setTraceRouter(internalTraceRouter.get());
+            }
+        }
     }
 }
