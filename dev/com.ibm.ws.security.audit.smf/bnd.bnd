@@ -1,0 +1,45 @@
+b-include= ~../ant_build/resources/bnd/bundle.props
+bVersion=1.0
+
+Bundle-Name: Security Audit 
+Bundle-SymbolicName: com.ibm.ws.security.audit.smf
+Bundle-Description: Security Audit: Security Audit SMF Handler; version=${bVersion}
+WS-TraceGroup: audit
+
+Export-Package:
+
+Private-Package: \
+   com.ibm.ws.config.xml.internal.nester, \
+   com.ibm.ws.security.audit.*
+
+DynamicImport-Package: \
+  com.ibm.wsspi.request.probe.*, \
+  com.ibm.webcontainer.security.*, \
+  com.ibm.ws.common.internal.encoder
+
+Include-Resource: \
+   OSGI-INF=resources/OSGI-INF
+
+-dsannotations: \
+   com.ibm.ws.security.audit.smf.AuditSMFHandler
+
+-buildpath: \
+	com.ibm.json4j;version=latest,\
+	com.ibm.websphere.javaee.servlet.3.0;version=latest,\
+	com.ibm.websphere.org.osgi.core;version=latest,\
+	com.ibm.websphere.org.osgi.service.component;version=latest,\
+	com.ibm.websphere.security;version=latest,\
+	com.ibm.ws.collector.manager;version=latest,\
+	com.ibm.ws.collector;version=latest,\
+	com.ibm.ws.config;version=latest,\
+	com.ibm.ws.crypto.passwordutil;version=latest,\
+	com.ibm.ws.kernel.boot;version=latest,\
+	com.ibm.ws.kernel.service;version=latest,\
+	com.ibm.ws.logging;version=latest,\
+	com.ibm.ws.org.osgi.annotation.versioning;version=latest,\
+	com.ibm.ws.request.probes;version=latest,\
+	com.ibm.ws.security.audit.source;version=latest,\
+	com.ibm.ws.ssl;version=latest,\
+	com.ibm.ws.webcontainer.security;version=latest,\
+	com.ibm.wsspi.org.osgi.service.component.annotations;version=latest
+	

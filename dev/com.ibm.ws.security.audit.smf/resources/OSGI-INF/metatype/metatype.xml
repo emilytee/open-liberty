@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metatype:MetaData xmlns:metatype="http://www.osgi.org/xmlns/metatype/v1.1.0"
+                   xmlns:ibm="http://www.ibm.com/xmlns/appservers/osgi/metatype/v1.0.0"
+                   xmlns:ibmui="http://www.ibm.com/xmlns/appservers/osgi/metatype/ui/v1.0.0" 
+                   localization="OSGI-INF/l10n/metatype">
+
+
+<OCD id="com.ibm.ws.security.audit.smf.handler.metatype" name="%audit.smf.handler" description="%audit.smf.handler.desc"	ibm:alias="auditSMFHandler">
+   <AD id="events" name="%events.name" description="%events.desc" required="false"  ibm:flat="true" ibm:type="pid" ibm:reference="com.ibm.ws.security.audit.event" type="String" cardinality="2147483647"/>
+</OCD>
+
+<Designate factoryPid="com.ibm.ws.security.audit.smf.handler">
+   <Object ocdref="com.ibm.ws.security.audit.smf.handler.metatype"/>
+</Designate>   
+
+</metatype:MetaData>

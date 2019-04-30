@@ -26,6 +26,7 @@ public interface AuditService {
     String AUDIT_SOURCE_LOCATION = "server";
     String AUDIT_SOURCE_SEPARATOR = "|";
     String AUDIT_FILE_HANDLER_NAME = "AuditFileHandler";
+    String AUDIT_SMF_HANDLER_NAME = "SMFHandler";
 
     void sendEvent(AuditEvent event);
 
